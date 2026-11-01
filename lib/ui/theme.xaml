@@ -1,7 +1,9 @@
 ﻿<!--
   Tabula Rasa: общие стили окон (главное окно, файлы с Диска, диалоги).
-  Цвета сюда не зашиты: кисти Bg, Surface, Accent и т.д. кладёт Set-UiPalette из lib\gui.ps1
-  по теме Windows (светлая/тёмная) и системному акценту. Сетка 8 px, кнопки и поля — 32 px.
+  Цвета сюда не зашиты: кисти Bg, Surface, Accent, Success, Warning и т.д. кладёт Set-UiPalette из lib\gui.ps1
+  (фирменная палитра, светлая и тёмная). Сетка 8 px, кнопки и поля — 32 px, скругление: элементы 6, карточки 8.
+  У каждого текста цвет задаётся явно или наследуется от окна/списка с Foreground = Text: системный чёрный по умолчанию
+  в тёмной теме нечитаем. Контраст всех видимых текстов проверяется в CI (tests\smoke.ps1).
 -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
@@ -320,8 +322,20 @@
                             <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Opacity" Value="0.5"/>
+                            <Setter TargetName="C" Property="Opacity" Value="0.6"/>
+                            <Setter TargetName="Box" Property="Opacity" Value="0.6"/>
                         </Trigger>
+                        <!-- отмечена и заблокирована (установленная программа): нейтральная заливка, галочка видна -->
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsChecked" Value="True"/>
+                                <Condition Property="IsEnabled" Value="False"/>
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Box" Property="Background" Value="{DynamicResource ControlStrong}"/>
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource ControlStrong}"/>
+                            <Setter TargetName="Mark" Property="Foreground" Value="{DynamicResource Surface}"/>
+                            <Setter TargetName="Box" Property="Opacity" Value="1"/>
+                        </MultiTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -409,6 +423,7 @@
 
     <!-- ===== списки ===== -->
     <Style TargetType="ListBox">
+        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="Padding" Value="0"/>
@@ -425,7 +440,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
                     <Border x:Name="Card" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1"
-                            CornerRadius="6" Margin="0,0,0,4" MinHeight="56" SnapsToDevicePixels="True">
+                            CornerRadius="8" Margin="0,0,0,6" MinHeight="56" SnapsToDevicePixels="True" TextElement.Foreground="{DynamicResource Text}">
                         <Grid Margin="8,0,12,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="32"/>
@@ -499,7 +514,12 @@
                             <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource AccentText}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding StatusKind}" Value="installed">
-                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource TextMuted}"/>
+                            <Setter TargetName="StatusPill" Property="Background" Value="{DynamicResource SuccessSoft}"/>
+                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource Success}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding StatusKind}" Value="partial">
+                            <Setter TargetName="StatusPill" Property="Background" Value="{DynamicResource WarningSoft}"/>
+                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource Warning}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsLocked}" Value="True">
                             <Setter TargetName="Check" Property="ToolTip" Value="Программа установлена. Действия с ней (обновить, переустановить, удалить, применить мои настройки) — в подробностях справа"/>
@@ -509,20 +529,22 @@
                             <Setter TargetName="ActionText" Property="Foreground" Value="{DynamicResource Danger}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding StatusKind}" Value="applied">
-                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource TextMuted}"/>
+                            <Setter TargetName="StatusPill" Property="Background" Value="{DynamicResource SuccessSoft}"/>
+                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource Success}"/>
                         </DataTrigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Card" Property="Background" Value="{DynamicResource SurfaceHover}"/>
+                            <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource ControlBorder}"/>
                             <!-- лёгкий подъём при наведении -->
                             <Setter TargetName="Card" Property="Effect">
                                 <Setter.Value>
-                                    <DropShadowEffect BlurRadius="8" ShadowDepth="1" Direction="270" Opacity="0.12"/>
+                                    <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270" Opacity="0.10" Color="{DynamicResource ShadowColor}"/>
                                 </Setter.Value>
                             </Setter>
                         </Trigger>
+                        <!-- выделенная — рамка акцента, фон прежний: заливка акцентом утяжеляла список -->
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="Card" Property="Background" Value="{DynamicResource AccentSoft}"/>
-                            <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource AccentText}"/>
+                            <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                            <Setter TargetName="Card" Property="BorderThickness" Value="2"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -534,7 +556,7 @@
     <ControlTemplate x:Key="NavCat" TargetType="ListBoxItem">
         <Grid x:Name="Root" Height="32" Background="Transparent" Margin="0,0,0,2">
             <Border x:Name="Bg" CornerRadius="6" Background="Transparent"/>
-            <Border x:Name="Pip" Width="3" Height="16" CornerRadius="1.5" HorizontalAlignment="Left" Background="{DynamicResource AccentText}" Visibility="Collapsed"/>
+            <Border x:Name="Pip" Width="3" Height="16" CornerRadius="1.5" HorizontalAlignment="Left" Background="{DynamicResource Accent}" Visibility="Collapsed"/>
             <Grid Margin="12,0,8,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="28"/>
@@ -570,9 +592,11 @@
                 <Setter TargetName="Bg" Property="Background" Value="{DynamicResource NavHover}"/>
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
-                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource SurfaceStrong}"/>
+                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AccentSoft}"/>
                 <Setter TargetName="Pip" Property="Visibility" Value="Visible"/>
                 <Setter TargetName="Ic" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                <Setter TargetName="N" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                <Setter TargetName="N" Property="FontWeight" Value="SemiBold"/>
             </Trigger>
         </ControlTemplate.Triggers>
     </ControlTemplate>

@@ -18,7 +18,7 @@
 
         <!-- ===== шапка: три зоны, которые не перекрываются ===== -->
         <!-- слева — значок, название, чипы (сжимаются из gui.ps1 Update-HostChips); по центру — режим; справа — поиск и действия -->
-        <Border Grid.Row="0" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
+        <Border Grid.Row="0" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
             <Grid Margin="24,14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" MinWidth="140"/>
@@ -514,7 +514,7 @@
                                 <Setter.Value>
                                     <ControlTemplate TargetType="ListBoxItem">
                                         <Border x:Name="Row" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1"
-                                                CornerRadius="6" Margin="0,0,0,4" Padding="12,8">
+                                                CornerRadius="8" Margin="0,0,0,6" Padding="12,10" TextElement.Foreground="{DynamicResource Text}">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="28"/>
@@ -524,7 +524,7 @@
                                                 <TextBlock x:Name="G" Style="{StaticResource Glyph}" Text="{Binding Glyph}" FontSize="14"
                                                            Foreground="{DynamicResource TextMuted}" VerticalAlignment="Top" Margin="0,2,0,0"/>
                                                 <StackPanel Grid.Column="1">
-                                                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap"/>
+                                                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap" Foreground="{DynamicResource Text}"/>
                                                     <TextBlock Text="{Binding Note}" TextWrapping="Wrap" Margin="0,2,0,0">
                                                         <TextBlock.Style>
                                                             <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
@@ -558,7 +558,8 @@
                                                 <Setter TargetName="S" Property="Foreground" Value="{DynamicResource AccentText}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding State}" Value="done">
-                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource Success}"/>
+                                                <Setter TargetName="S" Property="Foreground" Value="{DynamicResource Success}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding State}" Value="error">
                                                 <Setter TargetName="G" Property="Foreground" Value="{DynamicResource Danger}"/>

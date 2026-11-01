@@ -24,8 +24,10 @@ $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 # ---------- оформление ----------
 
 # тема: светлая/тёмная — по выбору в окне (кнопка в шапке, $script:PbThemePref = light | dark, хранится в ui.json)
-# или как в Windows (auto); акцент из DWM (запасной #0067C0), Segoe UI Variable, если есть
+# или как в Windows (auto). Цвета — фирменные (Set-UiPalette), не системный акцент: так контраст везде предсказуем.
+# Segoe UI Variable, если есть
 $script:PbThemePref = $null
+$script:PbBrandAccent = '#5146E0'   # фирменный индиго Tabula Rasa (значок, заставка, светлая тема)
 function Get-UiTheme {
     if ($null -eq $script:PbThemePref) {
         $script:PbThemePref = 'auto'
@@ -35,11 +37,7 @@ function Get-UiTheme {
     $dark = $false
     try { $dark = (Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'AppsUseLightTheme' -ErrorAction Stop) -eq 0 } catch { }
     if ($script:PbThemePref -eq 'dark') { $dark = $true } elseif ($script:PbThemePref -eq 'light') { $dark = $false }
-    $accent = [Windows.Media.Color]::FromRgb(0x00, 0x67, 0xC0)
-    try {
-        $v = [int64](Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\DWM' 'AccentColor' -ErrorAction Stop) -band 0xFFFFFFFF
-        $accent = [Windows.Media.Color]::FromRgb([byte]($v -band 0xFF), [byte](($v -shr 8) -band 0xFF), [byte](($v -shr 16) -band 0xFF))
-    } catch { }
+    $accent = [Windows.Media.ColorConverter]::ConvertFromString($script:PbBrandAccent)
     # файл шрифта вместо перечисления всех системных шрифтов: то занимало заметную часть старта окна
     $font = if (Test-Path (Join-Path $env:windir 'Fonts\SegUIVar.ttf')) { 'Segoe UI Variable Text' } else { 'Segoe UI' }
     return @{ Dark = $dark; Accent = $accent; Font = $font }
@@ -47,20 +45,6 @@ function Get-UiTheme {
 
 # кисти, на которые ссылается theme.xaml (DynamicResource)
 function Set-UiPalette ($Res, $Theme) {
-    function Mix ($A, $B, [double]$T) {
-        [Windows.Media.Color]::FromRgb([byte]($A.R + ($B.R - $A.R) * $T), [byte]($A.G + ($B.G - $A.G) * $T), [byte]($A.B + ($B.B - $A.B) * $T))
-    }
-    function Lum ($C) { (0.2126 * $C.R + 0.7152 * $C.G + 0.0722 * $C.B) / 255 }
-    # относительная яркость по WCAG и текст на заливке: чёрный или белый — у кого контраст выше (порог по Lum давал
-    # белый текст на светлых акцентах: 2,4:1 в тёмной теме при норме 4,5:1)
-    function RelLum ($C) {
-        $f = { param($v) $x = $v / 255; if ($x -le 0.03928) { $x / 12.92 } else { [Math]::Pow(($x + 0.055) / 1.055, 2.4) } }
-        0.2126 * (& $f $C.R) + 0.7152 * (& $f $C.G) + 0.0722 * (& $f $C.B)
-    }
-    function Get-OnColor ($C) { $l = RelLum $C; if ((1.05 / ($l + 0.05)) -ge (($l + 0.05) / 0.05)) { [Windows.Media.Colors]::White } else { [Windows.Media.Colors]::Black } }
-
-    $white = [Windows.Media.Colors]::White; $black = [Windows.Media.Colors]::Black
-    $a = $Theme.Accent
     # высокая контрастность: только системные цвета, свои не подмешиваются
     if ([Windows.SystemParameters]::HighContrast) {
         $sc = [Windows.SystemColors]
@@ -68,38 +52,34 @@ function Set-UiPalette ($Res, $Theme) {
                   Border = $sc::WindowTextColor; Control = $sc::ControlColor; ControlHover = $sc::ControlColor; ControlPressed = $sc::ControlColor
                   ControlBorder = $sc::WindowTextColor; ControlStrong = $sc::WindowTextColor; Text = $sc::WindowTextColor; TextMuted = $sc::GrayTextColor
                   PillBg = $sc::WindowColor; Danger = $sc::HotTrackColor; DangerSoft = $sc::WindowColor; ScrollThumb = $sc::ControlDarkColor
-                  Accent = $sc::HighlightColor; AccentFg = $sc::HighlightTextColor; AccentText = $sc::HotTrackColor; AccentSoft = $sc::WindowColor; Focus = $sc::WindowTextColor }
+                  Accent = $sc::HighlightColor; AccentFg = $sc::HighlightTextColor; AccentText = $sc::HotTrackColor; AccentSoft = $sc::WindowColor; Focus = $sc::WindowTextColor
+                  Success = $sc::WindowTextColor; SuccessSoft = $sc::WindowColor; Warning = $sc::WindowTextColor; WarningSoft = $sc::WindowColor }
         foreach ($k in $map.Keys) { $b = New-Object Windows.Media.SolidColorBrush $map[$k]; $b.Freeze(); $Res[$k] = $b.PSObject.BaseObject }
+        $Res['ShadowColor'] = [Windows.SystemColors]::WindowTextColor
         $Res['UiFont'] = (New-Object Windows.Media.FontFamily $Theme.Font).PSObject.BaseObject
         return
     }
+    # фирменная палитра. Контраст текста к фону — не ниже 4,5:1 во всех сочетаниях (Text/TextMuted/AccentText/статусы
+    # на Bg, Surface, SurfaceStrong, PillBg); проверяется в CI по живому окну (tests\smoke.ps1, Find-UiContrastIssues)
     if ($Theme.Dark) {
-        $p = @{ Bg = '#202020'; Surface = '#2B2B2B'; SurfaceHover = '#323232'; SurfaceStrong = '#383838'; NavHover = '#2D2D2D'
-                Border = '#383838'; Control = '#2D2D2D'; ControlHover = '#353535'; ControlPressed = '#282828'; ControlBorder = '#454545'
-                ControlStrong = '#9A9A9A'; Text = '#FFFFFF'; TextMuted = '#ABABAB'; PillBg = '#3A3A3A'; Danger = '#FF99A4'
-                DangerSoft = '#442726'; ScrollThumb = '#5C5C5C' }
-        $fill = Mix $a $white 0.45
-        $fillFg = Get-OnColor $fill
-        $text = Mix $a $white 0.5
-        $soft = [Windows.Media.Color]::FromArgb(0x33, $text.R, $text.G, $text.B)
+        $p = @{ Bg = '#0F1015'; Surface = '#17191F'; SurfaceHover = '#1E2028'; SurfaceStrong = '#262933'; NavHover = '#1C1E25'
+                Border = '#252832'; Control = '#1D1F27'; ControlHover = '#262933'; ControlPressed = '#1A1C23'; ControlBorder = '#363A46'
+                ControlStrong = '#8D94A3'; Text = '#ECEEF3'; TextMuted = '#A1A7B5'; PillBg = '#232630'; ScrollThumb = '#3A3E4A'
+                Danger = '#FF8F85'; DangerSoft = '#3A1E1E'; Success = '#5CD18A'; SuccessSoft = '#16301F'; Warning = '#F2B75B'; WarningSoft = '#3A2C14'
+                Accent = '#8B83FF'; AccentFg = '#0B0A1F'; AccentText = '#A9A3FF'; AccentSoft = '#2E2E4C'; Focus = '#A9A3FF'; Shadow = '#000000' }
     } else {
-        $p = @{ Bg = '#F3F3F3'; Surface = '#FFFFFF'; SurfaceHover = '#F5F5F5'; SurfaceStrong = '#E6E6E6'; NavHover = '#EBEBEB'
-                Border = '#E5E5E5'; Control = '#FBFBFB'; ControlHover = '#F3F3F3'; ControlPressed = '#EDEDED'; ControlBorder = '#D1D1D1'
-                ControlStrong = '#8A8A8A'; Text = '#1B1B1B'; TextMuted = '#5F5F5F'; PillBg = '#EDEDED'; Danger = '#C42B1C'
-                DangerSoft = '#FDE7E9'; ScrollThumb = '#C2C2C2' }
-        $fill = if ((Lum $a) -gt 0.45) { Mix $a $black 0.35 } else { $a }
-        $fillFg = Get-OnColor $fill
-        $text = $fill
-        $soft = [Windows.Media.Color]::FromArgb(0x1F, $fill.R, $fill.G, $fill.B)
+        $p = @{ Bg = '#F3F4F7'; Surface = '#FFFFFF'; SurfaceHover = '#F7F8FA'; SurfaceStrong = '#ECEEF3'; NavHover = '#E9EBF0'
+                Border = '#E3E6EC'; Control = '#FFFFFF'; ControlHover = '#F4F5F8'; ControlPressed = '#ECEEF3'; ControlBorder = '#D5D9E1'
+                ControlStrong = '#868D9C'; Text = '#15171E'; TextMuted = '#5A6170'; PillBg = '#EEF0F4'; ScrollThumb = '#C3C8D1'
+                Danger = '#C4271B'; DangerSoft = '#FCE9E7'; Success = '#146C34'; SuccessSoft = '#E3F4E8'; Warning = '#8F5400'; WarningSoft = '#FDF1DC'
+                Accent = $script:PbBrandAccent; AccentFg = '#FFFFFF'; AccentText = '#4338CA'; AccentSoft = '#E7E5FB'; Focus = '#5146E0'; Shadow = '#1B1F2A' }
     }
-    $colors = @{ Accent = $fill; AccentFg = $fillFg; AccentText = $text; AccentSoft = $soft }
-    foreach ($k in $p.Keys) { $colors[$k] = [Windows.Media.ColorConverter]::ConvertFromString($p[$k]) }
-    $colors.Focus = $colors.Text
     # BaseObject: иначе в словарь попадает обёртка PSObject и WPF видит строку вместо кисти
-    foreach ($k in $colors.Keys) {
-        $b = New-Object Windows.Media.SolidColorBrush $colors[$k]; $b.Freeze()
+    foreach ($k in $p.Keys) {
+        $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($p[$k])); $b.Freeze()
         $Res[$k] = $b.PSObject.BaseObject
     }
+    $Res['ShadowColor'] = ([Windows.Media.ColorConverter]::ConvertFromString($p.Shadow)).PSObject.BaseObject
     $Res['UiFont'] = (New-Object Windows.Media.FontFamily $Theme.Font).PSObject.BaseObject
 }
 
@@ -282,10 +262,10 @@ function Save-UiShot ($El, $Back, [string]$Path) {
     $dv = New-Object Windows.Media.DrawingVisual
     $dc = $dv.RenderOpen()
     $dc.DrawRectangle((New-Object Windows.Media.SolidColorBrush $Back), $null, $rect)
-    $dc.DrawRectangle((New-Object Windows.Media.VisualBrush $El), $null, $rect)
     $dc.Close()
     $bmp = New-Object Windows.Media.Imaging.RenderTargetBitmap $w, $h, 96, 96, ([Windows.Media.PixelFormats]::Pbgra32)
     $bmp.Render($dv)
+    $bmp.Render($El)
     $enc = New-Object Windows.Media.Imaging.PngBitmapEncoder
     $enc.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bmp))
     $fs = [IO.File]::Create($Path)
@@ -361,7 +341,8 @@ $script:PbCatIcons = @{
 function Get-CatIcon ([string]$Name) { if ($script:PbCatIcons.ContainsKey($Name)) { [string]$script:PbCatIcons[$Name] } else { [string][char]0xE9CE } }
 
 # спокойная палитра плиток-монограмм: цвет выбирается по Id и от запуска к запуску не меняется
-$script:PbMonoColors = @('#5B6C8F', '#6A7F5B', '#8F6A5B', '#5B8A8F', '#7A5B8F', '#8F7F5B', '#5B7A8F', '#8F5B6E', '#6E8F5B', '#5B5F8F')
+# плитки-монограммы: насыщенные тона, белая буква — не ниже 5:1 (было 3,9:1 на светлых)
+$script:PbMonoColors = @('#4F46E5', '#7C3AED', '#B4237A', '#C2410C', '#B45309', '#4D7C0F', '#047857', '#0F766E', '#0E7490', '#1D4ED8', '#6D28D9', '#BE123C', '#57534E', '#475569')
 function Get-MonoBrush ([string]$Id) {
     $h = 0; foreach ($c in $Id.ToCharArray()) { $h = ($h * 31 + [int]$c) % 1000003 }
     $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($script:PbMonoColors[$h % $script:PbMonoColors.Count]))
@@ -552,19 +533,6 @@ function Invoke-UiFade ($El) {
     $mv.EasingFunction = $ease
     $El.BeginAnimation([Windows.UIElement]::OpacityProperty, $op)
     $tt.BeginAnimation([Windows.Media.TranslateTransform]::YProperty, $mv)
-}
-
-# Windows 11 22H2+: Mica под окном (фон клиентской области прозрачный, карточки и панели — на своих подложках).
-# Windows 10, высокая контрастность, ошибка — плотный фон, как раньше
-function Set-UiBackdrop ($Win) {
-    if ([Environment]::OSVersion.Version.Build -lt 22621 -or [Windows.SystemParameters]::HighContrast) { return }
-    try {
-        $hwnd = (New-Object Windows.Interop.WindowInteropHelper $Win).Handle
-        if (-not [PcBase.Native]::SetMica($hwnd)) { return }
-        [PcBase.Native]::ExtendFrame($hwnd)
-        [Windows.Interop.HwndSource]::FromHwnd($hwnd).CompositionTarget.BackgroundColor = [Windows.Media.Colors]::Transparent
-        $Win.Background = [Windows.Media.Brushes]::Transparent
-    } catch { }
 }
 
 # размер, положение, развёрнутость, последний раздел: %LOCALAPPDATA%\tabula-rasa\ui.json
@@ -2386,7 +2354,6 @@ function Show-SelectionDialog {
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
     if ($saved -and $saved.Nav -and $cats.Contains([string]$saved.Nav)) { $start = $cats[[string]$saved.Nav] }
     $ctl.Nav.SelectedItem = $start
-    $win.add_SourceInitialized({ Set-UiBackdrop $win })
     $win.add_ContentRendered({
         # время от старта процесса до окна — в журнал выполнения (setup.ps1); цель — меньше 2 с
         try { $script:PB.WindowShownSec = [Math]::Round(((Get-Date) - (Get-Process -Id $PID).StartTime).TotalSeconds, 1) } catch { }
