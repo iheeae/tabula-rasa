@@ -642,7 +642,7 @@ try {
         $lib = Join-Path $root 'lib'
         $probe9 = "`$ErrorActionPreference = 'Stop'; . '$lib\common.ps1'; . '$lib\run.ps1'; `$script:PB.Root = '$root'; Add-Type -Path '$lib\ui\model.cs'; " +
             "`$s = ConvertTo-SecureString 'x' -AsPlainText -Force; `$a = [PcBase.AutoLogon]::StorePassword(`$s); `$b = [PcBase.AutoLogon]::ClearPassword(); `$c = [PcBase.AutoLogon]::ClearPassword(); " +
-            "Register-PbResumeTask; `$t = Test-PbResumeTask; Unregister-PbResumeTask; `$u = Test-PbResumeTask; `"`$a,`$b,`$c,`$t,`$u`""
+            "Register-PbResumeTask; `$t = Test-PbResumeTask; Unregister-PbResumeTask; `$u = Test-PbResumeTask; @(`$a, `$b, `$c, `$t, `$u) -join ','"   # без кавычек: при передаче в -Command они теряются
         $ci9 = & $ps -NoProfile -Command $probe9 2>&1
         Check 'Э9 (CI): секрет LSA пишется и удаляется, задача планировщика регистрируется и удаляется' ([string]$ci9 -eq '0,0,0,True,False') $ci9
     }
