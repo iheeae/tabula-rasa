@@ -38,6 +38,18 @@ $watch.add_Tick({
     }
 })
 $watch.Start()
+# второй сторож — в своём потоке: если завис сам поток окна (первый сторож тогда молчит), через 360 с — провал
+# с последним шагом проверки вместо немого тайм-аута шага CI
+$hang = [PowerShell]::Create()
+[void]$hang.AddScript({
+    param($Sec)
+    Start-Sleep -Seconds $Sec
+    $m = "окно не отвечает $Sec с (завис поток окна), последний шаг проверки: «$([Environment]::GetEnvironmentVariable('TR_SMOKE_STEP'))»"
+    [Console]::Out.WriteLine("FAIL $m")
+    if ([Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')) { [Console]::Out.WriteLine("::error title=tests/smoke.ps1::$m") }
+    [Console]::Out.Flush(); [Environment]::Exit(1)
+}).AddArgument(360)
+[void]$hang.BeginInvoke()
 try {
     $r = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Notices @('Проверка окна') -IsDomain $false -RunInWindow $true
     Write-Host "Окно закрылось через $([int]$sw.Elapsed.TotalSeconds) с"

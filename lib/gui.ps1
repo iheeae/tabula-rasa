@@ -587,9 +587,10 @@ function Show-AddAppDialog {
 
 # ---------- анимации, фон окна, запоминание окна ----------
 
-# смена категории: появление и сдвиг на 8 px за 180 мс; выключено, если в Windows отключены анимации
+# смена категории: появление и сдвиг на 8 px за 180 мс; выключено, если в Windows отключены анимации, и в проверке
+# окна (tests\smoke.ps1): снимок посреди появления — полупрозрачный текст и ложные замечания по контрасту
 function Invoke-UiFade ($El) {
-    if (-not [Windows.SystemParameters]::ClientAreaAnimation) { return }
+    if ($env:TR_SMOKE -or -not [Windows.SystemParameters]::ClientAreaAnimation) { return }
     $d = New-Object Windows.Duration ([TimeSpan]::FromMilliseconds(180))
     $ease = New-Object Windows.Media.Animation.CubicEase; $ease.EasingMode = 'EaseOut'
     $op = New-Object Windows.Media.Animation.DoubleAnimation 0, 1, $d
