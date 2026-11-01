@@ -224,7 +224,7 @@ namespace PcBase
         public string Detail { get { return _detail; } set { if (_detail == value) return; _detail = value ?? ""; Raise("Detail"); Raise("HasDetail"); } }
         public bool HasDetail { get { return !string.IsNullOrEmpty(_detail); } }
 
-        // значки Segoe Fluent Icons / MDL2: ожидание, идёт, готово, уже было, пропущено, ошибка
+        // значки Segoe Fluent Icons / MDL2: ожидание, идёт, готово, уже было, пропущено, ошибка, ждёт перезагрузки
         public string Glyph
         {
             get
@@ -236,6 +236,7 @@ namespace PcBase
                     case "same": return "\uE930";
                     case "skip": return "\uE738";
                     case "error": return "\uE783";
+                    case "reboot": return "\uE777";
                     default: return "\uEA3A";   // контурный кружок: «ожидает» не спорит с итогами шагов
                 }
             }
@@ -251,6 +252,7 @@ namespace PcBase
                     case "same": return "уже было";
                     case "skip": return "пропущено";
                     case "error": return "ошибка";
+                    case "reboot": return "после перезагрузки";
                     default: return "ожидает";
                 }
             }
@@ -277,6 +279,92 @@ namespace PcBase
 
         private bool _hit;
         public bool IsHit { get { return _hit; } set { if (_hit != value) { _hit = value; Raise("IsHit"); } } }
+    }
+
+    // временный автоматический вход на время прогона с перезагрузками (lib\resume.ps1): пароль — секрет LSA
+    // DefaultPassword (зашифрован системой, как у Autologon от Sysinternals), открытым текстом нигде не лежит.
+    // Пароль приходит SecureString и раскрывается только в неуправляемой памяти, которая затирается сразу после вызова
+    public static class AutoLogon
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LSA_UNICODE_STRING { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LSA_OBJECT_ATTRIBUTES { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+        [DllImport("advapi32.dll")]
+        private static extern uint LsaOpenPolicy(IntPtr systemName, ref LSA_OBJECT_ATTRIBUTES attributes, uint access, out IntPtr policy);
+        [DllImport("advapi32.dll", EntryPoint = "LsaStorePrivateData")]
+        private static extern uint LsaStore(IntPtr policy, ref LSA_UNICODE_STRING key, ref LSA_UNICODE_STRING data);
+        [DllImport("advapi32.dll", EntryPoint = "LsaStorePrivateData")]
+        private static extern uint LsaDelete(IntPtr policy, ref LSA_UNICODE_STRING key, IntPtr data);
+        [DllImport("advapi32.dll")]
+        private static extern int LsaNtStatusToWinError(uint status);
+        [DllImport("advapi32.dll")]
+        private static extern uint LsaClose(IntPtr policy);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool LogonUser(string user, string domain, IntPtr password, int type, int provider, out IntPtr token);
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr h);
+
+        private const uint POLICY_ALL_ACCESS = 0x000F0FFF;
+        private const string Key = "DefaultPassword";
+
+        private static LSA_UNICODE_STRING Str(IntPtr buf, int chars)
+        {
+            LSA_UNICODE_STRING s = new LSA_UNICODE_STRING();
+            s.Buffer = buf; s.Length = (ushort)(chars * 2); s.MaximumLength = (ushort)(chars * 2 + 2);
+            return s;
+        }
+
+        private static int WithPolicy(Func<IntPtr, uint> call)
+        {
+            LSA_OBJECT_ATTRIBUTES a = new LSA_OBJECT_ATTRIBUTES();
+            a.Length = Marshal.SizeOf(typeof(LSA_OBJECT_ATTRIBUTES));
+            IntPtr policy;
+            uint st = LsaOpenPolicy(IntPtr.Zero, ref a, POLICY_ALL_ACCESS, out policy);
+            if (st != 0) return LsaNtStatusToWinError(st);
+            try { return LsaNtStatusToWinError(call(policy)); } finally { LsaClose(policy); }
+        }
+
+        // 0 — сохранён, иначе код ошибки Windows
+        public static int StorePassword(System.Security.SecureString password)
+        {
+            IntPtr key = Marshal.StringToHGlobalUni(Key);
+            IntPtr pwd = Marshal.SecureStringToGlobalAllocUnicode(password);
+            try
+            {
+                LSA_UNICODE_STRING k = Str(key, Key.Length);
+                LSA_UNICODE_STRING d = Str(pwd, password.Length);
+                return WithPolicy(delegate (IntPtr p) { return LsaStore(p, ref k, ref d); });
+            }
+            finally { Marshal.ZeroFreeGlobalAllocUnicode(pwd); Marshal.FreeHGlobal(key); }
+        }
+
+        // удалить секрет; секрета нет — тоже успех
+        public static int ClearPassword()
+        {
+            IntPtr key = Marshal.StringToHGlobalUni(Key);
+            try
+            {
+                LSA_UNICODE_STRING k = Str(key, Key.Length);
+                int rc = WithPolicy(delegate (IntPtr p) { return LsaDelete(p, ref k, IntPtr.Zero); });
+                return rc == 2 ? 0 : rc;   // ERROR_FILE_NOT_FOUND
+            }
+            finally { Marshal.FreeHGlobal(key); }
+        }
+
+        // проверить пароль входом в систему (без сеанса): 0 — верный, 1326 — неверное имя или пароль
+        public static int Validate(string user, string domain, System.Security.SecureString password)
+        {
+            IntPtr pwd = Marshal.SecureStringToGlobalAllocUnicode(password);
+            try
+            {
+                IntPtr token;
+                if (!LogonUser(user, domain, pwd, 2, 0, out token)) return Marshal.GetLastWin32Error();
+                CloseHandle(token);
+                return 0;
+            }
+            finally { Marshal.ZeroFreeGlobalAllocUnicode(pwd); }
+        }
     }
 
     public static class Native

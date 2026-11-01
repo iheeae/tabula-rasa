@@ -1,14 +1,17 @@
 ﻿# Tabula Rasa: план и прогон. Один список шагов (Get-PbRunPlan) — и экран плана, и экран прогона в окне,
 # и вывод в консоль (setup.ps1 -Console).
 #
-# Шаг: @{ Key; Phase (1–7); PhaseName; Kind; Name; Ref; State = wait|run|done|same|skip|error; Detail; Note; Irreversible;
-#        Already (статус твика до прогона: applied|partial|no|unknown); Actions (действия «было → стало», Add-PbAction) }.
-# same — «уже было»: всё нужное уже стояло, ничего не менялось.
+# Шаг: @{ Key; Phase (1–7); PhaseName; Kind; Name; Ref; State = wait|run|done|same|skip|error|reboot; Detail; Note; Irreversible;
+#        Already (статус твика до прогона: applied|partial|no|unknown); Actions (действия «было → стало», Add-PbAction);
+#        Reboots (сколько раз шаг сам просил перезагрузку перед собой) }.
+# same — «уже было»: всё нужное уже стояло, ничего не менялось. reboot — ждёт перезагрузки (Э9, lib\resume.ps1):
+# конец прохода с такими шагами — пауза, состояние в resume.json, продолжение после входа (setup.ps1 -Resume).
 # Invoke-PbRun выполняет шаги по порядку. Из окна — в фоновом runspace с общим $Sync: State/Detail шагов,
 # $Sync.SkipCurrent (снять текущий), $Sync.StopAfter (остановить после текущего), вопросы — $Sync.Ask / $Sync.Answer
 # вместо Read-Host. Без $Sync — как раньше, в консоли. В конце — отчёт (lib\report.ps1), путь — $Sync.Report / $script:PB.Report.
 
 . (Join-Path $PSScriptRoot 'report.ps1')
+. (Join-Path $PSScriptRoot 'resume.ps1')
 
 # обычный хеш, не [ordered]: у [ordered] целое в [] — номер по порядку, а не ключ ($PbPhases[1] давал вторую фазу)
 $script:PbPhases = @{
@@ -18,7 +21,7 @@ $script:PbPhases = @{
 
 function New-PbStep ([int]$Phase, [string]$Kind, [string]$Key, [string]$Name, $Ref) {
     return [hashtable]::Synchronized(@{ Key = $Key; Phase = $Phase; PhaseName = $script:PbPhases[$Phase]; Kind = $Kind; Name = $Name; Ref = $Ref
-        State = 'wait'; Detail = ''; Note = ''; Irreversible = $false; Already = $null; Actions = @() })
+        State = 'wait'; Detail = ''; Note = ''; Irreversible = $false; Already = $null; Actions = @(); Reboots = 0 })
 }
 
 # $Sel — выбор окна (Apps, Configs, Tweaks, Files, FileTitles, Name, Upgrades, Reinstall, Remove); $Status — статусы окна (необязательно):
@@ -74,6 +77,9 @@ function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
             -not ($Status -and (($Status.Apps -and $Status.Apps[$r] -and $Status.Apps[$r].Kind -in 'installed', 'update') -or ($Status.Tweaks -and $Status.Tweaks[$r] -eq 'applied')))
         } | ForEach-Object { if ($all[$_]) { $all[$_].Name } else { $_ } })
         if ($miss.Count) { $s.Note = (@($s.Note, "требует: $($miss -join ', ') (не отмечено)") | Where-Object { $_ }) -join '; ' }
+        # Э9: нужное — пункт, после которого может понадобиться перезагрузка (RebootGate), и он в этом же плане
+        $gate = @(Get-PbRebootGates $s $all $plan)
+        if ($gate.Count) { $s.Note = (@($s.Note, "после перезагрузки, если её потребует «$($gate -join '», «')»") | Where-Object { $_ }) -join '; ' }
     }
     if ($Sel.Name -and $Sel.Name -ne $env:COMPUTERNAME) {
         $s = New-PbStep 7 'rename' 'rename' "Имя компьютера: $env:COMPUTERNAME → $($Sel.Name)" $Sel.Name
@@ -81,6 +87,21 @@ function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
         [void]$plan.Add($s)
     }
     return , $plan
+}
+
+# RebootGate-пункты из Requires шага, которые в плане и ещё не применены / не установлены: имена
+function Get-PbRebootGates ($Step, $All, $Plan) {
+    @(@($All[$Step.Ref].Requires) | Where-Object { $_ -and $All[$_] -and $All[$_].RebootGate } | Where-Object {
+        $r = $_; @($Plan | Where-Object { $_.Ref -eq $r -and $_.Kind -in 'app', 'tweak' -and $_.Note -notmatch 'будет пропущено' }).Count
+    } | ForEach-Object { $All[$_].Name })
+}
+
+# Э9: ожидаемые перезагрузки посреди прогона — для предупреждения перед ним. Пусто — предупреждать не о чем
+function Get-PbRebootForecast ($Plan, $Apps, $Tweaks) {
+    $all = @{}; foreach ($x in @(@($Apps) + @($Tweaks))) { if ($x.Id) { $all[$x.Id] = $x } }
+    @($Plan | Where-Object { $_.Kind -in 'app', 'tweak' } | ForEach-Object {
+        $s = $_; Get-PbRebootGates $s $all $Plan | ForEach-Object { "«$_» перед «$($all[$s.Ref].Name)»" }
+    } | Select-Object -Unique)
 }
 
 # шаг твика с проверкой до прогона: уже применено — будет пропущено, частично — изменится только отличающееся
@@ -148,8 +169,10 @@ function Get-PbStepState ($Results) {
     return @{ State = 'done'; Detail = $text }
 }
 
-# выполнить план. $Apps / $Tweaks — загруженные в этом же runspace (скриптблоки твиков привязаны к своему runspace)
-function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
+# выполнить план. $Apps / $Tweaks — загруженные в этом же runspace (скриптблоки твиков привязаны к своему runspace).
+# $Resume — состояние прошлого прохода (Read-PbResume): шаги уже перенесены в $Plan (Restore-PbResumeSteps),
+# здесь восстанавливаются итоги, журнал изменений и время начала — отчёт и журнал изменений общие на весь прогон
+function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync, $Resume) {
     $script:PB.RunSync = $Sync
     $script:PB.Upgrades = @($Sel.Upgrades)
     $script:PB.Reinstall = @($Sel.Reinstall)
@@ -159,15 +182,40 @@ function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
     $phase = 0
     $started = Get-Date
     $runErr = $null
+    $boots = 0; $rebooted = $false
+    if ($Resume) {
+        Restore-PbResumeRun $Resume
+        $started = ConvertTo-PbDate $Resume.Started
+        $boots = [int]$Resume.Boots
+        # перезагрузка была, если Windows загрузилась после паузы. Продолжили без неё — повторная просьба шага не ошибка
+        $rebooted = (Get-PbBootTime) -gt (ConvertTo-PbDate $Resume.Paused)
+        if ($rebooted) { $boots++ }
+        Write-Step "Продолжение прогона$(if ($rebooted) { " после перезагрузки ($boots)" })"
+    }
+    $script:PB.ResumePending = $false
+    # Э9: что нужно шагу (Requires; для «с моими настройками» — сама программа) и RebootGate-пункты, потребовавшие
+    # перезагрузку в этом проходе: шаг, которому нужно ждущее перезагрузки, тоже ждёт
+    $all = @{}; foreach ($x in @(@($Apps) + @($Tweaks))) { if ($x.Id) { $all[$x.Id] = $x } }
+    $stepOf = @{}; foreach ($x in $Plan) { if ($x.Kind -in 'app', 'tweak') { $stepOf[$x.Ref] = $x } }
+    $gates = @{}
     try {
         foreach ($s in $Plan) {
-            if ($s.State -ne 'wait') { continue }   # уже снят (нет точки восстановления, остановка)
+            if ($s.State -ne 'wait') { continue }   # уже снят (нет точки восстановления, остановка) или выполнен до перезагрузки
             if ($Sync -and $Sync.StopAfter) { $s.State = 'skip'; $s.Detail = 'прогон остановлен'; continue }
+            $need = if ($s.Kind -eq 'config') { @($s.Ref) } elseif ($s.Kind -in 'app', 'tweak' -and $all[$s.Ref]) { @($all[$s.Ref].Requires | Where-Object { $_ }) } else { @() }
+            $wait = @($need | Where-Object { $gates[$_] -or ($stepOf[$_] -and $stepOf[$_].State -eq 'reboot') })
+            if ($wait.Count) {
+                $names = @($wait | ForEach-Object { if ($all[$_]) { $all[$_].Name } else { $_ } })
+                $s.State = 'reboot'; $s.Detail = "выполнится после перезагрузки: нужна для «$($names -join '», «')»"
+                continue
+            }
             if ($s.Phase -ne $phase) { $phase = $s.Phase; Write-Step $s.PhaseName }
             if ($Sync) { $Sync.Current = $s.Key; $Sync.SkipCurrent = $false }
             $s.State = 'run'
             $mark = $script:PB.Results.Count
             $actMark = $script:PB.Actions.Count
+            # перезагрузка, которую потребовал именно этот шаг
+            $rebootBefore = $script:PB.NeedReboot; $script:PB.NeedReboot = $false; $script:PB.RebootFirst = $false
             try {
                 switch ($s.Kind) {
                     'restore' {
@@ -216,22 +264,59 @@ function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
                     }
                 }
             } catch { Write-Fail $_.Exception.Message; Add-Result $s.Name 'ОШИБКА' $_.Exception.Message }
+            $stepReboot = [bool]$script:PB.NeedReboot
+            $script:PB.NeedReboot = $rebootBefore -or $stepReboot
             $new = @($script:PB.Results | Select-Object -Skip $mark)
             $s.Actions = @($script:PB.Actions | Select-Object -Skip $actMark)
             if ($Sync -and $Sync.SkipCurrent) { $s.State = 'skip'; $s.Detail = 'пропущено вручную' }
+            elseif ($script:PB.RebootFirst) {
+                # шаг сам просит перезагрузку перед собой. Второй раз после настоящей перезагрузки — ошибка, а не новая перезагрузка
+                if ($s.Reboots -and $rebooted) {
+                    $s.State = 'error'; $s.Detail = 'после перезагрузки снова требуется перезагрузка'
+                    Add-Result $s.Name 'ОШИБКА' $s.Detail
+                } else { $s.Reboots = 1; $s.State = 'reboot'; $s.Detail = 'выполнится после перезагрузки: перед установкой нужна перезагрузка' }
+            }
             elseif ($new.Count) { $st = Get-PbStepState $new; $s.State = $st.State; $s.Detail = $st.Detail }
             else { $s.State = 'done' }
+            if ($stepReboot -and $s.State -eq 'done' -and $s.Kind -in 'app', 'tweak' -and $all[$s.Ref] -and $all[$s.Ref].RebootGate) { $gates[$s.Ref] = $true }
         }
+        $pending = @($Plan | Where-Object { $_.State -eq 'reboot' })
+        if ($pending.Count -and $Sync -and $Sync.StopAfter) { foreach ($x in $pending) { $x.State = 'skip'; $x.Detail = 'прогон остановлен' }; $pending = @() }
+        $script:PB.ResumePending = $pending.Count -gt 0
         if ($script:PB.NeedExplorerRestart) { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue }
     } catch { $runErr = $_.Exception.Message; throw
     } finally {
         $changesFile = $null
         if ($script:PB.Changes.Count) { $changesFile = Save-Changes }
         if ($script:PB.Manual.Count) { $script:PB.Manual | Set-Content -Path (Join-Path $script:PB.LogDir "manual_$($script:PB.Stamp).txt") -Encoding UTF8 }
+        # Э9: есть ждущие перезагрузки — задача планировщика на вход и состояние; иначе всё про продолжение убирается
+        if ($script:PB.ResumePending) {
+            try { Register-PbResumeTask }
+            catch {
+                $why = "продолжение после перезагрузки не подготовлено: $($_.Exception.Message)"
+                Write-Fail $why
+                foreach ($x in @($Plan | Where-Object { $_.State -eq 'reboot' })) { $x.State = 'error'; $x.Detail = $why; Add-Result $x.Name 'ОШИБКА' $why }
+                $script:PB.ResumePending = $false
+            }
+        }
+        if (-not $script:PB.ResumePending) { try { Stop-PbResume } catch { Write-Warn2 "состояние продолжения не очищено: $($_.Exception.Message)" } }
+        # отчёт один на прогон: промежуточный (до перезагрузки) заменяется
+        if ($Resume -and $Resume.Report) {
+            foreach ($f in @([string]$Resume.Report, (Join-Path $script:PB.LogDir (Split-Path ([string]$Resume.Report) -Leaf)))) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        }
         $script:PB.Report = $null
-        try { $script:PB.Report = Write-PbReport $Plan (Get-PbReportInfo $started $changesFile $runErr) }
+        $info = Get-PbReportInfo $started $changesFile $runErr
+        $info.Boots = $boots; $info.Pending = [bool]$script:PB.ResumePending
+        try { $script:PB.Report = Write-PbReport $Plan $info }
         catch { Write-Warn2 "отчёт не создан: $($_.Exception.Message)" }
-        if ($Sync) { $Sync.NeedReboot = $script:PB.NeedReboot; $Sync.Manual = @($script:PB.Manual); $Sync.Report = $script:PB.Report; $Sync.Done = $true }
+        if ($script:PB.ResumePending) {
+            try { Save-PbResume (New-PbResumeState $Plan $Sel $started $boots) }
+            catch { Write-Fail "состояние прогона не сохранено: $($_.Exception.Message)"; Unregister-PbResumeTask; $script:PB.ResumePending = $false }
+        }
+        if ($Sync) {
+            $Sync.NeedReboot = $script:PB.NeedReboot; $Sync.Manual = @($script:PB.Manual); $Sync.Report = $script:PB.Report
+            $Sync.ResumePending = [bool]$script:PB.ResumePending; $Sync.Boots = $boots; $Sync.Done = $true
+        }
         $script:PB.RunSync = $null
     }
 }
@@ -248,7 +333,7 @@ function Get-PbReportInfo ([datetime]$Started, [string]$ChangesFile, [string]$Er
     if (Get-Command Get-PbEngineVersion -ErrorAction SilentlyContinue) { $engine = Get-PbEngineVersion }
     return @{ Computer = $env:COMPUTERNAME; Windows = $win; Started = $Started; Finished = (Get-Date); Engine = $engine
         NeedReboot = [bool]$script:PB.NeedReboot; Manual = @($script:PB.Manual); ChangesFile = $ChangesFile
-        ChangesCount = @($script:PB.Changes).Count; LogDir = $script:PB.LogDir; Error = $Err }
+        ChangesCount = @($script:PB.Changes).Count; LogDir = $script:PB.LogDir; Error = $Err; Boots = 0; Pending = $false }
 }
 
 # ---------- откат (undo.ps1 и окно «Откат изменений») ----------

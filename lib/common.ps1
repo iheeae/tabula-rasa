@@ -11,6 +11,8 @@ $script:PB = [ordered]@{
     Manual               = New-Object System.Collections.ArrayList
     NeedExplorerRestart  = $false
     NeedReboot           = $false
+    RebootFirst          = $false     # шаг сообщил, что перед ним нужна перезагрузка (winget 0x8A15010A): ждёт её (Э9)
+    ResumePending        = $false     # прогон остановился до перезагрузки и продолжится после входа (lib\resume.ps1)
     Os                   = $null
     IsDomain             = $false
     IsLaptop             = $false
@@ -393,6 +395,12 @@ function Install-WingetApp ($App) {
     if ($r.TimedOut) {
         Write-Fail "$($App.Name): установка не завершилась за $limit мин и прервана"
         Add-Result $App.Name 'ТАЙМАУТ' "прервано через $limit мин; журнал winget: $($r.Log)"
+        return
+    }
+    if ($r.Code -eq -1978334966) {   # 0x8A15010A: установщику нужна перезагрузка до установки — шаг ждёт её (Э9)
+        Write-Warn2 "$($App.Name): перед установкой нужна перезагрузка, установка выполнится после неё"
+        Add-Result $App.Name 'ждёт перезагрузки' 'перед установкой нужна перезагрузка'
+        $script:PB.RebootFirst = $true
         return
     }
     $i = Get-PbWingetCodeInfo $r.Code

@@ -497,12 +497,12 @@
                 <TextBlock x:Name="RunHint" Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap"/>
                 <ProgressBar x:Name="RunProgress" Height="4" Margin="0,12,0,0" Minimum="0" Maximum="1" Visibility="Collapsed"/>
             </StackPanel>
-            <!-- нужна перезагрузка -->
+            <!-- нужна перезагрузка; прогон продолжится после перезагрузки (Э9) — текст из кода -->
             <Border x:Name="RunBanner" Grid.Row="1" Margin="24,4,24,8" Padding="16,10" CornerRadius="6" Visibility="Collapsed"
                     Background="{DynamicResource AccentSoft}" BorderBrush="{DynamicResource AccentText}" BorderThickness="1">
                 <DockPanel>
                     <TextBlock Style="{StaticResource Glyph}" Text="&#xE777;" Foreground="{DynamicResource AccentText}" Margin="0,0,10,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="Для завершения изменений нужна перезагрузка компьютера. Перезагрузить его можно кнопкой «Перезагрузить» внизу окна." VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="RunBannerText" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource Text}"/>
                 </DockPanel>
             </Border>
             <Grid Grid.Row="2">
@@ -573,6 +573,10 @@
                                             <DataTrigger Binding="{Binding State}" Value="done">
                                                 <Setter TargetName="G" Property="Foreground" Value="{DynamicResource Success}"/>
                                                 <Setter TargetName="S" Property="Foreground" Value="{DynamicResource Success}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding State}" Value="reboot">
+                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                                                <Setter TargetName="S" Property="Foreground" Value="{DynamicResource AccentText}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding State}" Value="error">
                                                 <Setter TargetName="G" Property="Foreground" Value="{DynamicResource Danger}"/>
