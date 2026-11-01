@@ -687,7 +687,7 @@ function Show-SelectionDialog {
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
         'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'TabSwitch', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
         'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
-        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunSelfRemove', 'RunApply', 'RunClose', 'RunStatus',
+        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunMore', 'RunSideCol', 'RunSide', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
         'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
@@ -1946,10 +1946,13 @@ function Show-SelectionDialog {
 
     function Set-RunButtons ([string]$State) {
         $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run')
-                  RunOpenReport = @('done'); RunOpenFolder = @('done'); RunReboot = @('done'); RunSelfRemove = @('done'); RunClose = @('done') }
+                  RunOpenReport = @('done'); RunMore = @('done'); RunReboot = @('done'); RunClose = @('done') }
         foreach ($k in $vis.Keys) { $ctl[$k].Visibility = if ($vis[$k] -contains $State) { 'Visible' } else { 'Collapsed' } }
         # журнал — только во время прогона и в итоге; на экране плана он пуст
         $ctl.LogToggle.Visibility = if ($State -eq 'plan') { 'Collapsed' } else { 'Visible' }
+        # на экране плана колонки журнала нет: шаги — на всю ширину
+        $ctl.RunSideCol.Width = if ($State -eq 'plan') { New-Object Windows.GridLength 0 } else { New-Object Windows.GridLength 360 }
+        $ctl.RunSide.Visibility = if ($State -eq 'plan') { 'Collapsed' } else { 'Visible' }
         if ($State -eq 'plan') { $ctl.RunLog.Visibility = 'Collapsed'; $ctl.LogToggle.Content = 'Показать журнал' }
         # во время прогона выбор и режимы не трогаются
         foreach ($c in $ctl.TabInstall, $ctl.TabCapture, $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn, $ctl.MoreBtn) { $c.IsEnabled = $State -ne 'run' }
@@ -2188,9 +2191,21 @@ function Show-SelectionDialog {
     $ctl.RunOpenLog.add_Click({ Start-Process explorer.exe $script:PB.LogDir })
     # через explorer.exe: браузер открывается от имени пользователя, а не с правами администратора, как у этого процесса
     $ctl.RunOpenReport.add_Click({ if ($ui.Report -and (Test-Path -LiteralPath $ui.Report)) { Start-Process explorer.exe "`"$($ui.Report)`"" } })
-    $ctl.RunOpenFolder.add_Click({
+    function Open-ReportFolder {
         if ($ui.Report -and (Test-Path -LiteralPath $ui.Report)) { Start-Process explorer.exe "/select,`"$($ui.Report)`"" }
         else { $d = Get-PbReportDir; if (-not (Test-Path $d)) { $d = $script:PB.LogDir }; Start-Process explorer.exe "`"$d`"" }
+    }
+    $ctl.RunMore.add_Click({
+        $m = $ctl.RunMore.ContextMenu
+        $m.Items.Clear()
+        foreach ($p in @(@('Открыть папку с отчётами', 'folder'), @('Удалить Tabula Rasa с этого компьютера…', 'remove-self'))) {
+            $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi)
+        }
+        $m.PlacementTarget = $ctl.RunMore; $m.IsOpen = $true
+    })
+    $ctl.RunMore.ContextMenu.AddHandler([Windows.Controls.MenuItem]::ClickEvent, [Windows.RoutedEventHandler]{
+        param($s, $e)
+        switch ([string]$e.Source.Tag) { 'folder' { Open-ReportFolder } 'remove-self' { Invoke-SelfRemove } }
     })
     $ctl.RunClose.add_Click({ $win.DialogResult = $true })
     # удаление программы: не во время прогона; запущено — окно закрывается, чтобы скрипт очистки мог удалить папку
@@ -2201,7 +2216,6 @@ function Show-SelectionDialog {
             $win.DialogResult = $true
         }
     }
-    $ctl.RunSelfRemove.add_Click({ Invoke-SelfRemove })
     $ctl.RunReboot.add_Click({
         if (Show-UiMessage -Owner $win -Title 'Перезагрузить компьютер?' -Primary 'Перезагрузить' -Secondary 'Позже' -SafeDefault -Lines @('Несохранённые данные в других программах будут потеряны.')) { Restart-Computer -Force }
     })
