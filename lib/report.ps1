@@ -6,7 +6,7 @@
 # действий «было → стало» (Actions шага); при печати раскрывается весь. Личного нет: пути профиля заменяются переменными
 # (%USERPROFILE% и т. п.), имя пользователя и репозиторий данных в отчёт не попадают — кроме имени компьютера.
 
-$script:PbStepStateText = @{ done = 'выполнено'; same = 'уже было'; skip = 'пропущено'; error = 'ошибка'; wait = 'не выполнялось'; run = 'прервано' }
+$script:PbStepStateText = @{ done = 'выполнено'; same = 'уже было'; skip = 'пропущено'; error = 'ошибка'; wait = 'не выполнялось'; run = 'прервано'; reboot = 'после перезагрузки' }
 
 # действия шага: сводка («изменено 3 из 5») и список «было → стало» под ней
 function ConvertTo-PbActionsHtml ($Actions) {
@@ -36,7 +36,8 @@ function Protect-PbReportText ([string]$Text) {
 
 function ConvertTo-PbHtml ([string]$Text) { [Net.WebUtility]::HtmlEncode((Protect-PbReportText $Text)) }
 
-# HTML отчёта. $Info: @{ Computer; Windows; Started; Finished; Engine; NeedReboot; Manual; ChangesFile; ChangesCount; LogDir; Error }
+# HTML отчёта. $Info: @{ Computer; Windows; Started; Finished; Engine; NeedReboot; Manual; ChangesFile; ChangesCount; LogDir; Error;
+#   Boots (перезагрузок во время прогона); Pending (прогон продолжится после перезагрузки — отчёт промежуточный) }
 function New-PbReportHtml ($Plan, $Info) {
     $steps = @($Plan)
     $cnt = @{}; foreach ($k in $script:PbStepStateText.Keys) { $cnt[$k] = @($steps | Where-Object { $_.State -eq $k }).Count }
@@ -61,7 +62,7 @@ table { width:100%; border-collapse:collapse } th, td { text-align:left; vertica
 th { color:var(--muted); font-weight:600 } td.st { white-space:nowrap } td.d { overflow-wrap:anywhere; color:var(--muted) }
 tr.ph td { font-weight:600; padding-top:16px; border-bottom:none }
 details { margin-top:4px } summary { cursor:pointer; color:var(--accent) } details ul { margin:4px 0 0; padding-left:18px } details li { margin:2px 0 }
-.same { color:var(--muted) } .done { color:var(--ok) } .skip { color:var(--warn) } .error, .run { color:var(--bad) } .wait { color:var(--muted) }
+.same { color:var(--muted) } .done { color:var(--ok) } .skip { color:var(--warn) } .error, .run { color:var(--bad) } .wait { color:var(--muted) } .reboot { color:var(--accent) }
 .alert { border-left:4px solid var(--bad) } .note { border-left:4px solid var(--accent) }
 ol { margin:0; padding-left:20px } code { font-family:Consolas,monospace; font-size:13px; overflow-wrap:anywhere }
 @media print { body { background:#fff; color:#000; padding:0 } .card { border-color:#ccc } :root { --muted:#444; --line:#ccc } }
@@ -74,6 +75,7 @@ ol { margin:0; padding-left:20px } code { font-family:Consolas,monospace; font-s
 <dt>Начало</dt><dd>$($Info.Started.ToString('dd.MM.yyyy HH:mm:ss'))</dd>
 <dt>Окончание</dt><dd>$($Info.Finished.ToString('dd.MM.yyyy HH:mm:ss'))</dd>
 <dt>Версия Tabula Rasa</dt><dd>$(ConvertTo-PbHtml $Info.Engine)</dd>
+$(if ($Info.Boots) { "<dt>Перезагрузок во время прогона</dt><dd>$([int]$Info.Boots)</dd>" })
 </dl></div>
 <div class="sum">
 <span class="pill">Шагов: $($steps.Count)</span><span class="pill done">Выполнено: $($cnt.done)</span>
@@ -81,10 +83,12 @@ $(if ($cnt.same) { "<span class=`"pill same`">Уже было: $($cnt.same)</spa
 $(if ($cnt.skip) { "<span class=`"pill skip`">Пропущено: $($cnt.skip)</span>" })
 $(if ($cnt.error) { "<span class=`"pill error`">С ошибкой: $($cnt.error)</span>" })
 $(if ($cnt.wait + $cnt.run) { "<span class=`"pill wait`">Не выполнено: $($cnt.wait + $cnt.run)</span>" })
+$(if ($cnt.reboot) { "<span class=`"pill reboot`">После перезагрузки: $($cnt.reboot)</span>" })
 </div>
 "@)
     if ($Info.Error) { [void]$sb.Append("<div class=`"card alert`"><b>Прогон прерван.</b> $(ConvertTo-PbHtml $Info.Error)</div>`n") }
-    if ($Info.NeedReboot) { [void]$sb.Append("<div class=`"card note`"><b>Нужна перезагрузка.</b> Часть изменений вступит в силу после перезагрузки компьютера.</div>`n") }
+    if ($Info.Pending) { [void]$sb.Append("<div class=`"card note`"><b>Прогон продолжится после перезагрузки.</b> Это промежуточный отчёт: после перезагрузки и входа в Windows оставшиеся шаги выполнятся, и отчёт будет заменён итоговым.</div>`n") }
+    elseif ($Info.NeedReboot) { [void]$sb.Append("<div class=`"card note`"><b>Нужна перезагрузка.</b> Часть изменений вступит в силу после перезагрузки компьютера.</div>`n") }
     if ($bad.Count) {
         [void]$sb.Append("<h2>Что не получилось</h2><div class=`"card alert`"><table>`n")
         foreach ($s in $bad) { [void]$sb.Append("<tr><td>$(ConvertTo-PbHtml $s.Name)</td><td class=`"d`">$(ConvertTo-PbHtml $s.Detail)</td></tr>`n") }

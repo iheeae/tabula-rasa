@@ -2,6 +2,7 @@
 # снятие настроек, разметка репозитория данных, имена ассетов. Запуск из корня репозитория:
 #   powershell -ExecutionPolicy Bypass -File tests\run.ps1        (или pwsh -File tests/run.ps1)
 # Нужен git. Всё пишется во временную папку; сеть, gh и «Мои данные» на этом компьютере не затрагиваются.
+# Э9: состояние прогона — во временной папке, задача планировщика и секрет LSA подменены, Winlogon — тестовый ключ в HKCU.
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
@@ -20,6 +21,18 @@ function Check ([string]$Name, [bool]$Ok, $Got) {
 }
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tabula-rasa-tests-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $tmp | Out-Null
+# прогон в конце убирает всё про продолжение (Stop-PbResume): здесь — только во временной папке и без планировщика и LSA
+function Set-PbResumeSandbox {
+    $script:PbResume.Dir = Join-Path $tmp 'resume'
+    $script:PbResume.Winlogon = 'HKCU:\Software\tabula-rasa-tests\' + (Split-Path $tmp -Leaf)
+    function script:Register-PbResumeTask { $script:Task9 = 'on' }
+    function script:Unregister-PbResumeTask { $script:Task9 = 'off' }
+    function script:Test-PbResumeTask { $script:Task9 -eq 'on' }
+    function script:Set-PbLogonSecret ($Password) { [void]$script:Secret9.Add('set'); 0 }
+    function script:Clear-PbLogonSecret { [void]$script:Secret9.Add('clear'); 0 }
+}
+$script:Secret9 = New-Object System.Collections.ArrayList
+Set-PbResumeSandbox
 
 try {
     # ---------- winget search ----------
@@ -523,8 +536,120 @@ try {
     $sync2 = [hashtable]::Synchronized(@{ StopAfter = $true })
     Invoke-PbRun $plan2 $sel $aps $tws $sync2 6>$null | Out-Null
     Check 'прогон: «остановить» — остальные шаги пропущены' (@($plan2 | Where-Object { $_.State -ne 'skip' }).Count -eq 0 -and ($plan2[1].Detail -eq 'прогон остановлен'))
-    foreach ($f in 'Invoke-Tweak', 'Install-App', 'Initialize-Winget', 'Invoke-PbWingetTimed', 'Set-NoConfig', 'Save-PbFiles', 'Rename-Computer', 'Request-PbAnswer') { Remove-Item "function:$f" -ErrorAction SilentlyContinue }
+
+    # ---------- Э9: продолжение после перезагрузки ----------
+    Write-Host 'продолжение после перезагрузки'
+    $script:PB.LogDir = Join-Path $tmp 'logs9'; $script:PB.Stamp = '2026-11-01_100000'
+    $script:PB.Results.Clear(); $script:PB.Manual.Clear(); $script:PB.Changes.Clear(); $script:PB.NeedReboot = $false
+    $rtw = @(@{ Id = 'g.wsl'; Name = 'WSL2'; Phase = 'pre'; RebootGate = $true; Apply = {} }, @{ Id = 'p.x'; Name = 'Твик X'; Phase = 'pre'; Apply = {} })
+    $rap = @(@{ Id = 'dk'; Name = 'Docker'; Source = 'winget'; WingetId = 'D.K'; Requires = @('g.wsl') },
+             @{ Id = 'n8'; Name = 'Прог N'; Source = 'winget'; WingetId = 'N.8'; Config = @{ File = 'n8\x.json'; Import = 'Set-N8Config' } },
+             @{ Id = 'a1'; Name = 'Прог 1'; Source = 'winget'; WingetId = 'A.One' })
+    $rsel = @{ Apps = @('dk', 'n8', 'a1'); Tweaks = @('g.wsl', 'p.x'); Configs = @('n8'); Files = @(); Name = $null }
+    $rst = @{ Apps = @{}; Tweaks = @{ 'g.wsl' = 'no'; 'p.x' = 'no' } }
+    $rp = Get-PbRunPlan $rsel $rap $rtw $rst
+    $fc = @(Get-PbRebootForecast $rp $rap $rtw)
+    $fc2 = @(Get-PbRebootForecast (Get-PbRunPlan $rsel $rap $rtw @{ Apps = @{}; Tweaks = @{ 'g.wsl' = 'applied'; 'p.x' = 'no' } }) $rap $rtw)
+    Check 'Э9: прогноз — перезагрузка перед Docker; WSL уже применён — не ожидается' ($fc.Count -eq 1 -and $fc[0] -eq '«WSL2» перед «Docker»' -and -not $fc2.Count -and
+        ($rp | Where-Object Key -eq 'app:dk').Note -match 'после перезагрузки') @($fc + $fc2)
+
+    $script:Calls9 = New-Object System.Collections.ArrayList
+    function Invoke-Tweak ($T) { [void]$script:Calls9.Add($T.Id); if ($T.Id -eq 'g.wsl') { $script:PB.NeedReboot = $true }; Add-Result $T.Name 'применено' }
+    function Install-App ($A) {
+        [void]$script:Calls9.Add($A.Id)
+        if ($A.Id -eq 'n8' -and -not $script:N8Ok) { Add-Result $A.Name 'ждёт перезагрузки' 'перед установкой нужна перезагрузка'; $script:PB.RebootFirst = $true }
+        else { Add-Result $A.Name 'установлено' }
+    }
+    function Set-N8Config { [void]$script:Calls9.Add('cfg'); Add-Result 'Прог N: мои настройки' 'применено' }
+    function Get-PbBootTime { $script:Boot9 }
+    $script:N8Ok = $false; $script:Boot9 = (Get-Date).AddHours(-1); $script:Task9 = $null
+    $rp[0].State = 'skip'   # точка восстановления — не на этом компьютере
+    $s1 = [hashtable]::Synchronized(@{})
+    Invoke-PbRun $rp $rsel $rap $rtw $s1 6>$null | Out-Null
+    $st1 = ($rp | ForEach-Object { "$($_.Key)=$($_.State)" }) -join ' '
+    Check 'Э9: проход 1 — ждут Docker (после WSL), Прог N и его настройки, остальное выполнено' (
+        $st1 -eq 'restore=skip tweak:g.wsl=done tweak:p.x=done app:dk=reboot app:n8=reboot app:a1=done config:n8=reboot' -and ($rp | Where-Object Key -eq 'app:dk').Detail -match 'WSL2') $st1
+    $rs = Read-PbResume
+    $h1 = if ($s1.Report -and (Test-Path $s1.Report)) { Get-Content $s1.Report -Raw -Encoding UTF8 } else { '' }
+    Check 'Э9: пауза — состояние, задача на вход, промежуточный отчёт' ($s1.ResumePending -and $script:Task9 -eq 'on' -and $rs -and $rs.Stamp -eq '2026-11-01_100000' -and
+        @($rs.Steps).Count -eq 7 -and (Test-PbResumeOwner $rs) -and $h1 -match 'Прогон продолжится после перезагрузки' -and $h1 -match 'После перезагрузки: 3') $rs
+
+    $script:N8Ok = $true; $script:Boot9 = Get-Date
+    $script:PB.Results.Clear(); $script:PB.Stamp = 'другой'; $script:Calls9.Clear()   # должны вернуться из состояния
+    $rsel2 = Get-PbResumeSel $rs
+    $rp2 = Get-PbRunPlan $rsel2 $rap $rtw $rst
+    Restore-PbResumeSteps $rp2 $rs
+    $s2 = [hashtable]::Synchronized(@{})
+    Invoke-PbRun $rp2 $rsel2 $rap $rtw $s2 $rs 6>$null | Out-Null
+    $st2 = ($rp2 | ForEach-Object { "$($_.Key)=$($_.State)" }) -join ' '
+    Check 'Э9: продолжение — выполнены только ждавшие шаги, тот же прогон' ($st2 -eq 'restore=skip tweak:g.wsl=done tweak:p.x=done app:dk=done app:n8=done app:a1=done config:n8=done' -and
+        ($script:Calls9 -join ',') -eq 'dk,n8,cfg' -and $script:PB.Stamp -eq '2026-11-01_100000') @($st2, ($script:Calls9 -join ','))
+    $h2 = if ($s2.Report -and (Test-Path $s2.Report)) { Get-Content $s2.Report -Raw -Encoding UTF8 } else { '' }
+    Check 'Э9: конец — состояние и задача убраны, один отчёт на прогон, итоги обоих проходов, перезагрузок 1' (-not $s2.ResumePending -and $script:Task9 -eq 'off' -and -not (Read-PbResume) -and
+        ($s1.Report -eq $s2.Report -or -not (Test-Path $s1.Report)) -and $h2 -notmatch 'Прогон продолжится' -and $h2 -match 'Перезагрузок во время прогона</dt><dd>1' -and $s2.Boots -eq 1 -and
+        @($script:PB.Results | Where-Object { $_.'Что' -eq 'Прог 1' }).Count -eq 1) @($s2.Boots, $script:Task9)
+
+    # предохранитель: шаг снова просит перезагрузку — без неё снова ждёт, после настоящей перезагрузки — ошибка
+    $script:PB.Stamp = '2026-11-01_110000'; $script:PB.Results.Clear(); $script:N8Ok = $false; $script:Boot9 = (Get-Date).AddHours(-1)
+    $gsel = @{ Apps = @('n8'); Tweaks = @(); Configs = @(); Files = @() }
+    $gp = Get-PbRunPlan $gsel $rap $rtw $null; $gp[0].State = 'skip'
+    Invoke-PbRun $gp $gsel $rap $rtw ([hashtable]::Synchronized(@{})) 6>$null | Out-Null
+    $g1 = Read-PbResume
+    $gp2 = Get-PbRunPlan $gsel $rap $rtw $null; Restore-PbResumeSteps $gp2 $g1
+    Invoke-PbRun $gp2 $gsel $rap $rtw ([hashtable]::Synchronized(@{})) $g1 6>$null | Out-Null
+    $noBoot = "$($gp2[1].State)/$($gp2[1].Reboots)"
+    $g2 = Read-PbResume; $script:Boot9 = Get-Date
+    $gp3 = Get-PbRunPlan $gsel $rap $rtw $null; Restore-PbResumeSteps $gp3 $g2
+    Invoke-PbRun $gp3 $gsel $rap $rtw ([hashtable]::Synchronized(@{})) $g2 6>$null | Out-Null
+    Check 'Э9: предохранитель — без перезагрузки снова ждёт, после неё повторная просьба — ошибка, прогон закончен' ($noBoot -eq 'reboot/1' -and $gp3[1].State -eq 'error' -and
+        $gp3[1].Detail -match 'снова' -and -not (Read-PbResume) -and $script:Task9 -eq 'off') @($noBoot, $gp3[1].State, $gp3[1].Detail)
+
+    # имя компьютера сменилось после перезагрузки: шага переименования в новом плане нет — он возвращается из состояния
+    $nsel = @{ Apps = @('a1'); Tweaks = @(); Configs = @(); Files = @(); Name = 'PC-09' }
+    $np = Get-PbRunPlan $nsel $rap $rtw $null
+    foreach ($x in $np) { $x.State = 'done' }
+    $nst = New-PbResumeState $np $nsel (Get-Date) 0
+    $nsel2 = @{ Apps = @('a1'); Tweaks = @(); Configs = @(); Files = @(); Name = $env:COMPUTERNAME }
+    $np2 = Get-PbRunPlan $nsel2 $rap $rtw $null
+    $before = $np2.Count
+    Restore-PbResumeSteps $np2 ($nst | ConvertTo-Json -Depth 8 | ConvertFrom-Json)
+    Check 'Э9: шаг, которого нет в новом плане, возвращается на своё место' ($before -eq 2 -and $np2.Count -eq 3 -and $np2[2].Key -eq 'rename' -and $np2[2].State -eq 'done' -and
+        $np2[2].Phase -eq 7) (($np2 | ForEach-Object { $_.Key }) -join ',')
+
+    # временный автоматический вход — на тестовом ключе вместо Winlogon
+    $w = $script:PbResume.Winlogon
+    try {
+        New-Item -Path $w -Force | Out-Null
+        New-ItemProperty -Path $w -Name 'AutoAdminLogon' -Value '0' -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $w -Name 'DefaultUserName' -Value 'old' -PropertyType String -Force | Out-Null
+        $script:Secret9.Clear()
+        $sec = ConvertTo-SecureString 'x' -AsPlainText -Force
+        Enable-PbAutoLogon $sec
+        $idle = Get-ItemProperty $w
+        Set-PbAutoLogonArmed $true; $on = Get-ItemProperty $w
+        Set-PbAutoLogonArmed $false; $off = Get-ItemProperty $w
+        Stop-PbResume; $back = Get-ItemProperty $w
+        Check 'Э9: автовход — пароль сохранён, вход только на одну загрузку, после входа выключен, в конце всё как было' ($idle.AutoAdminLogon -eq '0' -and
+            $on.AutoAdminLogon -eq '1' -and $on.AutoLogonCount -eq 1 -and $on.DefaultUserName -eq $env:USERNAME -and $off.AutoAdminLogon -eq '0' -and $null -eq $off.AutoLogonCount -and
+            $back.AutoAdminLogon -eq '0' -and $back.DefaultUserName -eq 'old' -and $null -eq $back.DefaultDomainName -and -not (Test-PbAutoLogonEnabled) -and
+            ($script:Secret9 -join ',') -eq 'set,clear') @($on, $back)
+        function Set-PbLogonSecret ($Password) { 5 }
+        $err = $null; try { Enable-PbAutoLogon $sec } catch { $err = $_.Exception.Message }
+        Check 'Э9: пароль не сохранён — ошибка, автовход не остаётся включённым' ($err -match 'код 5' -and -not (Test-PbAutoLogonEnabled)) $err
+    } finally { Remove-Item -Path (Split-Path $w) -Recurse -Force -ErrorAction SilentlyContinue }
+    # настоящие LSA и планировщик — только в CI (одноразовая машина с правами администратора), в отдельном процессе
+    if ($env:GITHUB_ACTIONS) {
+        $lib = Join-Path $root 'lib'
+        $probe9 = "`$ErrorActionPreference = 'Stop'; . '$lib\common.ps1'; . '$lib\run.ps1'; `$script:PB.Root = '$root'; Add-Type -Path '$lib\ui\model.cs'; " +
+            "`$s = ConvertTo-SecureString 'x' -AsPlainText -Force; `$a = [PcBase.AutoLogon]::StorePassword(`$s); `$b = [PcBase.AutoLogon]::ClearPassword(); `$c = [PcBase.AutoLogon]::ClearPassword(); " +
+            "Register-PbResumeTask; `$t = Test-PbResumeTask; Unregister-PbResumeTask; `$u = Test-PbResumeTask; @(`$a, `$b, `$c, `$t, `$u) -join ','"   # без кавычек: при передаче в -Command они теряются
+        $ci9 = & $ps -NoProfile -Command $probe9 2>&1
+        Check 'Э9 (CI): секрет LSA пишется и удаляется, задача планировщика регистрируется и удаляется' ([string]$ci9 -eq '0,0,0,True,False') $ci9
+    }
+
+    foreach ($f in 'Invoke-Tweak', 'Install-App', 'Initialize-Winget', 'Invoke-PbWingetTimed', 'Set-NoConfig', 'Save-PbFiles', 'Rename-Computer', 'Request-PbAnswer', 'Set-N8Config', 'Get-PbBootTime') { Remove-Item "function:$f" -ErrorAction SilentlyContinue }
     . (Join-Path (Join-Path $root 'lib') 'common.ps1'); . (Join-Path (Join-Path $root 'lib') 'files.ps1'); . (Join-Path (Join-Path $root 'lib') 'run.ps1')
+    Set-PbResumeSandbox
     $script:PB.Root = $root; $script:PB.LogDir = Join-Path $tmp 'logs2'; $script:PB.DataRoot = Join-Path $tmp 'nodata'
     New-Item -ItemType Directory $script:PB.LogDir -Force | Out-Null
     '[{"Kind":"Reg"},{"Kind":"Reg"}]' | Set-Content (Join-Path $script:PB.LogDir 'changes_2026-10-01_101500.json')

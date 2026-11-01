@@ -52,6 +52,14 @@ Windows и файлов. Название в интерфейсе и текст�
 - **Цвета** — только кисти палитры (`Set-UiPalette`: Text, TextMuted, Accent, Success, Warning, Danger…), никаких
   зашитых цветов и системного чёрного: у текста цвет задаётся явно или наследуется от окна/списка с `Foreground = Text`.
   Контраст текстов в обеих темах проверяет `tests/smoke.ps1` в CI, снимки — в ветке `ci-screenshots`.
+- **Перезагрузки** (Э9) — `lib/resume.ps1`: шаг, которому нужна перезагрузка до него, — состояние `reboot`
+  (`$script:PB.RebootFirst`; пункт `Requires` → `RebootGate`-пункт, потребовавший перезагрузку). Конец прохода с такими
+  шагами — `resume.json`, задача планировщика на вход, отсчёт 60 с; продолжение — `setup.ps1 -Resume`, тот же `Stamp`,
+  один журнал изменений и отчёт. Шаг сам просит перезагрузку второй раз после настоящей перезагрузки — ошибка, не цикл.
+  Временный автоматический вход — только по выбору пользователя: пароль — секрет LSA (`PcBase.AutoLogon`), в файлы и реестр
+  открытым текстом не пишется; `AutoAdminLogon` — только на одну загрузку. Параметры Winlogon — временное состояние вне
+  журнала изменений (не `Set-Reg`): прежние значения — `autologon.json`, возврат — `Clear-PbAutoLogon` (конец, отмена,
+  запуск без незавершённого прогона). В тестах LSA, планировщик и Winlogon подменяются, на живом входе не проверять.
 - **Отчёт** — `lib/report.ps1`, один механизм для окна, `-Console` и будущего клиентского отчёта; без личного, кроме
   имени компьютера (`Protect-PbReportText`), всё экранируется.
 - **Старые места** (`C:\pc-base`, `C:\pc-base-private`, `%LOCALAPPDATA%\pc-base`, `%ProgramData%\pc-base`) — в `$script:PbLegacy`.
@@ -103,6 +111,8 @@ lib/data.ps1         сохранения (Read-/Write-SaveFile, Save-/Rename-/R
 lib/catalog.ps1      свой каталог (Read-/Write-PbUserCatalog, Add-/Remove-PbUserApp), поиск winget (Search-PbWinget, разбор по колонкам)
 lib/status.ps1       статус: программы (реестр Uninstall → winget list, ConvertFrom-PbWingetList), твики (Get-PbTweakStatus в common.ps1)
 lib/run.ps1          план и прогон: Get-PbRunPlan (шаги по фазам), Invoke-PbRun ($Sync из окна или консоль), Get-PbChangeLogs, Invoke-PbUndo
+lib/resume.ps1       продолжение после перезагрузки (Э9): resume.json, задача «Tabula Rasa — продолжение прогона», Get-PbRebootForecast
+                     (в run.ps1), временный автоматический вход (Enable-/Clear-PbAutoLogon, Set-PbAutoLogonArmed)
 lib/report.ps1       отчёт о прогоне: HTML в «Документы\Tabula Rasa\Отчёты» и в logs (Write-PbReport, Protect-PbReportText)
 lib/selfremove.ps1   удаление с компьютера: Get-PbSelfRemoveParts, скрипт очистки во временной папке (ждёт процесс, удаляет
                      только свои папки — Test-PbSafeRemovePath, «Мои данные» — Test-PbOwnDataRoot), два подтверждения в окне

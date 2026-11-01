@@ -319,6 +319,72 @@ function Show-UiMessage {
     return [bool]$d.ShowDialog()
 }
 
+# пароль (Э9, временный автоматический вход): SecureString или $null (отмена, пусто). Пароль не попадает в строки
+function Read-UiPassword {
+    param($Owner, [string]$Title, $Lines)
+    $theme = Initialize-Ui
+    $d = New-UiWindow 'dialog.xaml' $theme
+    if ($Owner) { $d.Owner = $Owner } else { $d.WindowStartupLocation = 'CenterScreen' }
+    $d.FindName('Head').Text = $Title
+    $body = $d.FindName('Body')
+    foreach ($l in @($Lines)) {
+        $tb = New-Object Windows.Controls.TextBlock
+        $tb.TextWrapping = 'Wrap'; $tb.Margin = '0,4,0,0'; $tb.LineHeight = 20; $tb.Text = [string]$l
+        [void]$body.Children.Add($tb)
+    }
+    $box = New-Object Windows.Controls.PasswordBox
+    $box.Margin = '0,16,0,0'
+    [Windows.Automation.AutomationProperties]::SetName($box, 'Пароль')
+    [void]$body.Children.Add($box)
+    $bp = $d.FindName('Primary'); $bs = $d.FindName('Secondary')
+    $bp.Content = 'Продолжить'; $bp.IsDefault = $true
+    $bp.add_Click({ $d.DialogResult = $true })
+    $bs.Content = 'Отмена'; $bs.IsCancel = $true
+    $d.add_ContentRendered({ [void]$box.Focus() })
+    $ok = [bool]$d.ShowDialog()
+    $sec = if ($ok -and $box.SecurePassword.Length) { $box.SecurePassword } else { $null }   # SecurePassword — копия
+    $box.Clear()
+    return $sec
+}
+
+# обратный отсчёт (Э9, перезагрузка для продолжения): $true — время вышло или нажата главная кнопка, $false — отменено
+function Show-UiCountdown {
+    param($Owner, [string]$Title, $Lines, [int]$Seconds = 60, [string]$Primary = 'Сейчас', [string]$Secondary = 'Отменить',
+        [string]$Format = 'Осталось {0} с')
+    $theme = Initialize-Ui
+    $d = New-UiWindow 'dialog.xaml' $theme
+    if ($Owner) { $d.Owner = $Owner } else { $d.WindowStartupLocation = 'CenterScreen' }
+    $d.FindName('Head').Text = $Title
+    $body = $d.FindName('Body')
+    foreach ($l in @($Lines)) {
+        $tb = New-Object Windows.Controls.TextBlock
+        $tb.TextWrapping = 'Wrap'; $tb.Margin = '0,4,0,0'; $tb.LineHeight = 20
+        if ($l -is [hashtable]) { $tb.Text = $l.Text; if ($l.Tone -eq 'muted') { $tb.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'TextMuted') } }
+        else { $tb.Text = [string]$l }
+        [void]$body.Children.Add($tb)
+    }
+    $count = New-Object Windows.Controls.TextBlock
+    $count.Margin = '0,16,0,0'; $count.FontWeight = 'SemiBold'; $count.FontSize = 20
+    $count.Text = $Format -f $Seconds
+    [void]$body.Children.Add($count)
+    $bp = $d.FindName('Primary'); $bs = $d.FindName('Secondary')
+    $bp.Content = $Primary; $bp.add_Click({ $d.DialogResult = $true })
+    $bs.Content = $Secondary; $bs.IsCancel = $true
+    $st = @{ Left = $Seconds }
+    $t = New-Object Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromSeconds(1)
+    $t.add_Tick({
+        $st.Left--
+        $count.Text = $Format -f [Math]::Max(0, $st.Left)
+        if ($st.Left -le 0) { $t.Stop(); $d.DialogResult = $true }
+    })
+    # по умолчанию — «Отменить»: случайный Enter не перезагружает компьютер раньше времени
+    $d.add_ContentRendered({ [void]$bs.Focus(); $t.Start() })
+    $r = [bool]$d.ShowDialog()
+    $t.Stop()
+    return $r
+}
+
 function Get-Plural ([int]$N, [string]$One, [string]$Few, [string]$Many) {
     $m10 = $N % 10; $m100 = $N % 100
     if ($m10 -eq 1 -and $m100 -ne 11) { return $One }
@@ -676,7 +742,8 @@ function Show-SelectionDialog {
         [string[]]$Notices,          # что сказать при открытии (переезд папок и т. п.)
         [bool]$IsDomain = $false,
         [bool]$RunInWindow = $true,  # план, прогон и итог — в окне (по умолчанию); $false — вернуть выбор, прогон в консоли (-Console)
-        [string]$Title = 'Tabula Rasa'
+        [string]$Title = 'Tabula Rasa',
+        $Resume                      # Э9: незавершённый прогон (Read-PbResume) — окно сразу продолжает его на экране прогона
     )
 
     $theme = Initialize-Ui
@@ -686,7 +753,7 @@ function Show-SelectionDialog {
         'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
         'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'TabSwitch', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
-        'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
+        'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunBannerText', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
         'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunMore', 'RunSideCol', 'RunSide', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
@@ -1956,6 +2023,8 @@ function Show-SelectionDialog {
         if ($State -eq 'plan') { $ctl.RunLog.Visibility = 'Collapsed'; $ctl.LogToggle.Content = 'Показать журнал' }
         # во время прогона выбор и режимы не трогаются
         foreach ($c in $ctl.TabInstall, $ctl.TabCapture, $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn, $ctl.MoreBtn) { $c.IsEnabled = $State -ne 'run' }
+        # прогон ждёт перезагрузки (Э9): новый прогон до неё смешал бы два — назад к выбору нельзя, пока не отказались от продолжения
+        if ($State -eq 'done' -and $ui.ResumePending) { $ctl.RunBack.Visibility = 'Collapsed' }
     }
 
     function Show-Pane ([string]$Which) {
@@ -2016,6 +2085,48 @@ function Show-SelectionDialog {
         return (Show-UiMessage -Owner $win -Title "Применить к $($env:COMPUTERNAME)?" -Lines $lines -Primary 'Применить' -Secondary 'Назад' -SafeDefault)
     }
 
+    # Э9: перезагрузки посреди прогона ожидаются — предупредить и предложить временный автоматический вход.
+    # Не ожидаются — ничего не спрашивается. $false — вернуться к плану, прогон не начинается
+    function Confirm-Reboots ($C) {
+        $fc = @(Get-PbRebootForecast (Get-PbRunPlan $C $appList $Tweaks $ui.Status) $appList $Tweaks)
+        if (-not $fc.Count) { return $true }
+        $head = 'Компьютер будет перезагружен'
+        $lines = @("Во время прогона потребуется перезагрузка: $($fc -join '; '). После неё прогон продолжится с того же места.",
+            @{ Text = 'Перед перезагрузкой окно 60 секунд показывает обратный отсчёт; перезагрузку можно отменить. Несохранённые данные в других программах будут потеряны.'; Tone = 'muted' })
+        $sup = Get-PbAutoLogonSupport
+        if ($sup.Already) {
+            $lines += @{ Text = 'На компьютере настроен автоматический вход: после перезагрузки прогон продолжится без участия пользователя.'; Gap = $true }
+            return (Show-UiMessage -Owner $win -Title $head -Lines $lines -Primary 'Продолжить' -Secondary 'Назад' -SafeDefault)
+        }
+        if (-not $sup.Ok) {
+            $lines += @{ Text = "Автоматический вход недоступен. $($sup.Reason) После перезагрузки нужно войти в Windows, иначе прогон не продолжится."; Tone = 'strong'; Gap = $true }
+            return (Show-UiMessage -Owner $win -Title $head -Lines $lines -Primary 'Продолжить' -Secondary 'Назад' -SafeDefault)
+        }
+        $lines += @{ Text = 'Чтобы прогон продолжился без вас, Tabula Rasa может на время прогона входить в Windows автоматически. Для этого нужен пароль вашей учётной записи Windows.'; Gap = $true }
+        $lines += @{ Text = 'Пароль проверяется и хранится в зашифрованном системном хранилище Windows (LSA), не в файлах и не в реестре. По окончании или отмене прогона он удаляется, параметры входа возвращаются к прежним, а компьютер блокируется.'; Tone = 'muted' }
+        while ($true) {
+            if (Show-UiMessage -Owner $win -Title $head -Lines $lines -Primary 'Входить автоматически…' -Secondary 'Входить вручную') {
+                $sec = Read-UiPassword -Owner $win -Title 'Пароль Windows' -Lines @("Пароль учётной записи $env:USERDOMAIN\$env:USERNAME. Он используется только для входа после перезагрузок этого прогона.")
+                if (-not $sec) { continue }
+                try {
+                    $rc = Test-PbLogonPassword $sec
+                    if ($rc -ne 0) {
+                        $why = switch ($rc) { 1326 { 'Пароль неверный.' } 1327 { 'Учётная запись без пароля или с ограничениями входа: автоматический вход для неё недоступен.' } default { "Windows не приняла пароль (код $rc)." } }
+                        [void](Show-UiMessage -Owner $win -Title 'Пароль не подошёл' -Lines @($why))
+                        continue
+                    }
+                    Enable-PbAutoLogon $sec
+                } catch {
+                    [void](Show-UiMessage -Owner $win -Title 'Автоматический вход не настроен' -Lines @("$($_.Exception.Message)", 'После перезагрузки нужно будет войти в Windows вручную.'))
+                } finally { $sec.Dispose() }
+                return $true
+            }
+            return (Show-UiMessage -Owner $win -Title 'Вход вручную' -Primary 'Продолжить' -Secondary 'Назад' -SafeDefault -Lines @(
+                'После каждой перезагрузки нужно войти в Windows: прогон продолжится только после входа.',
+                @{ Text = 'Если отойти от компьютера, он будет ждать на экране входа.'; Tone = 'muted' }))
+        }
+    }
+
     # план в окне: те же шаги, что выполнит прогон, с пометками «будет пропущено», «необратимо»
     function Show-Plan ($C) {
         $plan = Get-PbRunPlan $C $appList $Tweaks $ui.Status
@@ -2039,16 +2150,19 @@ function Show-SelectionDialog {
     }
 
     # прогон в фоновом runspace: каталог и твики загружаются там же (скриптблоки привязаны к своему runspace)
-    function Start-Run ($C) {
-        $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'   # у каждого прогона — свой журнал изменений
+    # $Resume — незавершённый прогон (Э9): тот же Stamp, журналы дописываются, шаги восстанавливаются из состояния
+    function Start-Run ($C, $Resume) {
+        # у каждого прогона — свой журнал изменений; продолжение после перезагрузки — тот же прогон
+        $stamp = if ($Resume) { [string]$Resume.Stamp } else { Get-Date -Format 'yyyy-MM-dd_HHmmss' }
         New-Item -ItemType Directory -Path $script:PB.LogDir -Force | Out-Null
         $ui.RunLogFile = Join-Path $script:PB.LogDir "run_$stamp.log"
         $ui.RunStamp = $stamp
+        $ui.ResumePending = $false
         $sync = [hashtable]::Synchronized(@{ Status = $ui.Status; Steps = $null; Current = $null; SkipCurrent = $false; StopAfter = $false
-            Ask = $null; Answer = $null; Done = $false; NeedReboot = $false; Manual = @() })
+            Ask = $null; Answer = $null; Done = $false; NeedReboot = $false; Manual = @(); ResumePending = $false; Boots = 0 })
         $ps = [PowerShell]::Create()
         [void]$ps.AddScript({
-            param($Root, $DataRoot, $LogDir, $Stamp, $Sel, $Sync)
+            param($Root, $DataRoot, $LogDir, $Stamp, $Sel, $Sync, $Resume)
             foreach ($f in 'common', 'data', 'files', 'catalog', 'configs', 'status', 'run') { . (Join-Path $Root "lib\$f.ps1") }
             $script:PB.Root = $Root; $script:PB.DataRoot = $DataRoot; $script:PB.LogDir = $LogDir; $script:PB.Stamp = $Stamp
             Get-EnvInfo
@@ -2058,14 +2172,17 @@ function Show-SelectionDialog {
             . (Join-Path $Root 'catalog\tweaks.ps1')
             $Tweaks = @($Tweaks | Where-Object { $_.Os -contains $script:PB.Os })
             $plan = Get-PbRunPlan $Sel $Apps $Tweaks $Sync.Status
+            if ($Resume) { Restore-PbResumeSteps $plan $Resume }
             $Sync.Steps = $plan
-            Invoke-PbRun $plan $Sel $Apps $Tweaks $Sync
+            Invoke-PbRun $plan $Sel $Apps $Tweaks $Sync $Resume
         })
-        foreach ($a in @($script:PB.Root, $script:PB.DataRoot, $script:PB.LogDir, $stamp, $C, $sync)) { [void]$ps.AddArgument($a) }
+        foreach ($a in @($script:PB.Root, $script:PB.DataRoot, $script:PB.LogDir, $stamp, $C, $sync, $Resume)) { [void]$ps.AddArgument($a) }
         $ui.Run = @{ Ps = $ps; Handle = $ps.BeginInvoke(); Sync = $sync; Sel = $C; LogPos = 0; Built = $false }
-        $ctl.RunTitle.Text = 'Выполнение'
+        $ctl.RunTitle.Text = if ($Resume) { 'Выполнение: продолжение после перезагрузки' } else { 'Выполнение' }
         $ctl.RunHint.Text = "Компьютер $env:COMPUTERNAME. Окно можно свернуть: по окончании кнопка на панели задач замигает."
         $ctl.RunLog.Clear(); $manualItems.Clear()
+        # журнал до перезагрузки — в окне выше продолжения
+        if ($Resume -and (Test-Path -LiteralPath $ui.RunLogFile)) { try { $ctl.RunLog.AppendText([IO.File]::ReadAllText($ui.RunLogFile)) } catch { } }
         $ctl.RunProgress.Value = 0; $ctl.RunProgress.Visibility = 'Visible'
         $ctl.RunBanner.Visibility = 'Collapsed'; $ctl.ManualBox.Visibility = 'Collapsed'
         $ctl.RunStop.IsEnabled = $true; $ctl.RunStop.Content = 'Остановить после текущего'
@@ -2074,7 +2191,7 @@ function Show-SelectionDialog {
         $win.TaskbarItemInfo.ProgressState = 'Indeterminate'
         Set-RunButtons 'run'
         Show-Pane 'run'
-        Add-RunLog "Tabula Rasa, прогон $stamp, компьютер $env:COMPUTERNAME"
+        Add-RunLog $(if ($Resume) { "Продолжение прогона $stamp после перезагрузки, компьютер $env:COMPUTERNAME" } else { "Tabula Rasa, прогон $stamp, компьютер $env:COMPUTERNAME" })
         $runTimer.Start()
     }
 
@@ -2127,7 +2244,16 @@ function Show-SelectionDialog {
         if ($Err) { $ctl.RunHint.Text += " Прогон прерван: $Err" }
         $ctl.RunProgress.Value = 1
         $win.TaskbarItemInfo.ProgressState = if ($bad -or $Err) { 'Error' } else { 'None' }
-        $ctl.RunBanner.Visibility = if ($s.NeedReboot) { 'Visible' } else { 'Collapsed' }
+        $ui.ResumePending = [bool]$s.ResumePending
+        $ctl.RunBanner.Visibility = if ($s.NeedReboot -or $ui.ResumePending) { 'Visible' } else { 'Collapsed' }
+        $ctl.RunBannerText.Text = 'Для завершения изменений нужна перезагрузка компьютера. Перезагрузить его можно кнопкой «Перезагрузить» внизу окна.'
+        if ($ui.ResumePending) {
+            $wait = @($runSteps | Where-Object { $_.State -eq 'reboot' }).Count
+            $ctl.RunTitle.Text = 'Ожидает перезагрузки'
+            $ctl.RunHint.Text = "Выполнено шагов: $(@($runSteps | Where-Object { $_.State -in 'done', 'same' }).Count) из $($runSteps.Count). После перезагрузки: $wait$(if ($bad) { ", с ошибкой: $bad" }). Журналы: $($script:PB.LogDir)."
+            $ctl.RunBannerText.Text = if (Test-PbAutoLogonEnabled) { 'Прогон продолжится после перезагрузки: вход в Windows выполнится автоматически.' }
+                else { 'Прогон продолжится после перезагрузки и входа в Windows.' }
+        }
         # «выполнить вручную» — галочки, отметки сохраняются рядом с журналами
         $manualItems.Clear()
         $state = Join-Path $script:PB.LogDir "manual_$($ui.RunStamp).json"
@@ -2141,16 +2267,31 @@ function Show-SelectionDialog {
         $ui.Report = $s.Report
         $ctl.RunStatus.Text = if ($s.Report) { "Отчёт: $($s.Report)" } else { "Отчёт не создан. Журнал выполнения: $($ui.RunLogFile)" }
         Set-RunButtons 'done'
-        $ctl.RunRetry.Visibility = if ($bad) { 'Visible' } else { 'Collapsed' }
+        $ctl.RunRetry.Visibility = if ($bad -and -not $ui.ResumePending) { 'Visible' } else { 'Collapsed' }
         $ctl.RunOpenReport.IsEnabled = [bool]$s.Report
         # нужна перезагрузка — главная кнопка «Перезагрузить», иначе «Закрыть»
         $accent = $win.FindResource('AccentButton')
-        if ($s.NeedReboot) { $ctl.RunReboot.Style = $accent; $ctl.RunClose.ClearValue([Windows.FrameworkElement]::StyleProperty) }
+        if ($s.NeedReboot -or $ui.ResumePending) { $ctl.RunReboot.Style = $accent; $ctl.RunClose.ClearValue([Windows.FrameworkElement]::StyleProperty) }
         else { $ctl.RunClose.Style = $accent; $ctl.RunReboot.ClearValue([Windows.FrameworkElement]::StyleProperty) }
         if (-not $win.IsActive) { [PcBase.Native]::Flash((New-Object Windows.Interop.WindowInteropHelper $win).Handle) }
         $ui.Ran = $true
         $ui.Run = $null
         if ($ui.StatusJob -and $ui.StatusJob.Handle.IsCompleted) { $ui.StatusJob = $null; Start-StatusJob }   # статусы после прогона — заново
+        if ($ui.ResumePending) { Invoke-ResumeCountdown }
+        # прогон с автоматическим входом закончен: компьютер не остаётся открытым без хозяина
+        elseif ($ui.AutoLogonUsed) { $ui.AutoLogonUsed = $false; Start-Process rundll32.exe 'user32.dll,LockWorkStation' }
+    }
+
+    # Э9: 60 с до перезагрузки; отменили — итог остаётся на экране, перезагрузить можно кнопкой, продолжение не отменяется
+    function Invoke-ResumeCountdown {
+        $auto = Test-PbAutoLogonEnabled
+        $wait = @($runSteps | Where-Object { $_.State -eq 'reboot' }).Count
+        $go = Show-UiCountdown -Owner $win -Title 'Перезагрузка для продолжения прогона' -Seconds 60 -Primary 'Перезагрузить сейчас' -Secondary 'Отменить' `
+            -Format 'Перезагрузка через {0} с' -Lines @(
+                "Шагов, которые выполнятся после перезагрузки: $wait.",
+                $(if ($auto) { 'После перезагрузки вход в Windows выполнится автоматически, и прогон продолжится сам.' } else { 'После перезагрузки войдите в Windows: прогон продолжится автоматически.' }),
+                @{ Text = 'Сохраните открытые документы в других программах.'; Tone = 'muted' })
+        if ($go -and $ui.ResumePending) { Restart-PbForResume }
     }
 
     # «Повторить упавшее»: новый прогон только из шагов с ошибкой
@@ -2173,6 +2314,7 @@ function Show-SelectionDialog {
 
     $ctl.RunApply.add_Click({
         if (-not (Confirm-Apply $ui.PlanSel)) { return }
+        if (-not (Confirm-Reboots $ui.PlanSel)) { return }
         $ui.LastSel = $ui.PlanSel
         Start-Run $ui.PlanSel
     })
@@ -2186,6 +2328,7 @@ function Show-SelectionDialog {
     $ctl.RunRetry.add_Click({
         $sel = Get-RetryChoice
         if (-not (Confirm-Apply $sel)) { return }
+        if (-not (Confirm-Reboots $sel)) { return }
         Start-Run $sel
     })
     $ctl.RunOpenLog.add_Click({ Start-Process explorer.exe $script:PB.LogDir })
@@ -2198,27 +2341,45 @@ function Show-SelectionDialog {
     $ctl.RunMore.add_Click({
         $m = $ctl.RunMore.ContextMenu
         $m.Items.Clear()
-        foreach ($p in @(@('Открыть папку с отчётами', 'folder'), @('Удалить Tabula Rasa с этого компьютера…', 'remove-self'))) {
+        $menu = @(, @('Открыть папку с отчётами', 'folder'))   # запятая: массив пар, а не плоский список строк
+        if ($ui.ResumePending) { $menu += , @('Не продолжать после перезагрузки…', 'no-resume') }
+        $menu += , @('Удалить Tabula Rasa с этого компьютера…', 'remove-self')
+        foreach ($p in $menu) {
             $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi)
         }
         $m.PlacementTarget = $ctl.RunMore; $m.IsOpen = $true
     })
     $ctl.RunMore.ContextMenu.AddHandler([Windows.Controls.MenuItem]::ClickEvent, [Windows.RoutedEventHandler]{
         param($s, $e)
-        switch ([string]$e.Source.Tag) { 'folder' { Open-ReportFolder } 'remove-self' { Invoke-SelfRemove } }
+        switch ([string]$e.Source.Tag) { 'folder' { Open-ReportFolder } 'no-resume' { Stop-Resume } 'remove-self' { Invoke-SelfRemove } }
     })
     $ctl.RunClose.add_Click({ $win.DialogResult = $true })
     # удаление программы: не во время прогона; запущено — окно закрывается, чтобы скрипт очистки мог удалить папку
     function Invoke-SelfRemove {
         if ($ui.Run) { [void](Show-UiMessage -Owner $win -Title 'Прогон выполняется' -Lines @('Удалить Tabula Rasa можно после окончания прогона.')); return }
         if (Show-SelfRemoveDialog $win) {
+            Stop-PbResume   # незавершённый прогон (Э9): задача планировщика и пароль автоматического входа — тоже прочь
             $ui.SelfRemoving = $true
             $win.DialogResult = $true
         }
     }
     $ctl.RunReboot.add_Click({
-        if (Show-UiMessage -Owner $win -Title 'Перезагрузить компьютер?' -Primary 'Перезагрузить' -Secondary 'Позже' -SafeDefault -Lines @('Несохранённые данные в других программах будут потеряны.')) { Restart-Computer -Force }
+        if (-not (Show-UiMessage -Owner $win -Title 'Перезагрузить компьютер?' -Primary 'Перезагрузить' -Secondary 'Позже' -SafeDefault -Lines @('Несохранённые данные в других программах будут потеряны.'))) { return }
+        if ($ui.ResumePending) { Restart-PbForResume } else { Restart-Computer -Force }
     })
+    # отказ от продолжения (Э9): задача планировщика, состояние и пароль автоматического входа удаляются
+    function Stop-Resume {
+        if (-not (Show-UiMessage -Owner $win -Title 'Не продолжать прогон?' -Primary 'Не продолжать' -Secondary 'Назад' -SafeDefault -Lines @(
+            'Шаги, которые ждут перезагрузки, выполнены не будут. Их можно выполнить новым прогоном.',
+            @{ Text = 'Пароль автоматического входа, если он был сохранён, удаляется.'; Tone = 'muted' }))) { return }
+        Stop-PbResume
+        $ui.ResumePending = $false
+        foreach ($r in @($runSteps | Where-Object { $_.State -eq 'reboot' })) { $r.State = 'skip'; $r.Detail = 'не продолжено после перезагрузки' }
+        $ctl.RunTitle.Text = 'Прогон остановлен'
+        $ctl.RunBannerText.Text = 'Прогон не будет продолжен после перезагрузки.'
+        $ctl.RunBack.Visibility = 'Visible'
+        $ctl.RunReboot.ClearValue([Windows.FrameworkElement]::StyleProperty); $ctl.RunClose.Style = $win.FindResource('AccentButton')
+    }
     $ctl.LogToggle.add_Click({
         $show = $ctl.RunLog.Visibility -ne 'Visible'
         $ctl.RunLog.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
@@ -2381,8 +2542,15 @@ function Show-SelectionDialog {
         # заставка (lib\splash.ps1) уступает место окну
         if (Get-Command Close-PbSplash -ErrorAction SilentlyContinue) { Set-PbSplash '' 1; Close-PbSplash }
         Start-FilesJob
-        Start-StatusJob
-        Start-EngineCheck
+        if ($Resume) {
+            # продолжение прогона (Э9): сразу экран прогона; статусы и обновления движка — не посреди прогона
+            $ui.AutoLogonUsed = Test-PbAutoLogonEnabled
+            $ui.LastSel = Get-PbResumeSel $Resume
+            Start-Run $ui.LastSel $Resume
+        } else {
+            Start-StatusJob
+            Start-EngineCheck
+        }
         Update-Theme
         $themeTimer.Start()
         if (Initialize-DataLayout) { Start-DataJob 'push' }
@@ -2448,6 +2616,16 @@ function Show-SelectionDialog {
                             & $shot "$th-5-log"
                             $win.UpdateLayout()
                             if ($ctl.RunLog.ActualHeight -lt 120) { throw "журнал выполнения слишком низкий: $([int]$ctl.RunLog.ActualHeight) px" }
+                            # Э9: итог, когда часть шагов ждёт перезагрузки
+                            if ($runSteps.Count) {
+                                $runSteps[0].State = 'done'
+                                $last = $runSteps[$runSteps.Count - 1]; $last.State = 'reboot'; $last.Detail = 'выполнится после перезагрузки: перед установкой нужна перезагрузка'
+                            }
+                            $ctl.RunTitle.Text = 'Ожидает перезагрузки'
+                            $ctl.RunBannerText.Text = 'Прогон продолжится после перезагрузки и входа в Windows.'; $ctl.RunBanner.Visibility = 'Visible'
+                            $ui.ResumePending = $true; Set-RunButtons 'done'; $ui.ResumePending = $false
+                            & $shot "$th-8-resume"
+                            $ctl.RunBanner.Visibility = 'Collapsed'
                             Show-Pane 'select'; Set-RunButtons 'plan'
                             $ctl.TabCapture.IsChecked = $true
                             & $shot "$th-6-capture"
@@ -2462,6 +2640,17 @@ function Show-SelectionDialog {
                             foreach ($x in (Find-UiContrastIssues $d.Content ([Windows.Application]::Current.Resources['Bg'].Color))) { [void]$issues.Add("$th-dialog — $x") }
                             if ($shots) { Save-UiShot $d.Content ([Windows.Application]::Current.Resources['Bg'].Color) (Join-Path $shots "$th-7-dialog.png") }
                             $d.Close()
+                            # Э9: пароль для временного автоматического входа (Read-UiPassword) — поле пароля в теме окна
+                            $d = New-UiWindow 'dialog.xaml' (Initialize-Ui)
+                            $d.Owner = $win; $d.FindName('Head').Text = 'Пароль Windows'
+                            $tb = New-Object Windows.Controls.TextBlock; $tb.Text = 'Пароль учётной записи PC-01\user. Он используется только для входа после перезагрузок этого прогона.'; $tb.TextWrapping = 'Wrap'; [void]$d.FindName('Body').Children.Add($tb)
+                            $pw = New-Object Windows.Controls.PasswordBox; $pw.Margin = '0,16,0,0'; $pw.Password = 'smoke'; [void]$d.FindName('Body').Children.Add($pw)
+                            $d.FindName('Primary').Content = 'Продолжить'; $d.FindName('Secondary').Content = 'Отмена'
+                            $d.Show(); $d.UpdateLayout()
+                            if ($pw.ActualHeight -lt 30) { throw "поле пароля без стиля: высота $([int]$pw.ActualHeight) px" }
+                            foreach ($x in (Find-UiContrastIssues $d.Content ([Windows.Application]::Current.Resources['Bg'].Color))) { [void]$issues.Add("$th-password — $x") }
+                            if ($shots) { Save-UiShot $d.Content ([Windows.Application]::Current.Resources['Bg'].Color) (Join-Path $shots "$th-9-password.png") }
+                            $pw.Clear(); $d.Close()
                         }
                         $script:PbThemePref = 'auto'; Update-Theme
                         Write-Host "  smoke: снимки готовы, замечаний по контрасту: $($issues.Count)"

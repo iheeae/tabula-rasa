@@ -15,6 +15,7 @@
 #   -DataRoot <папка>       где лежат свои данные, если не в C:\tabula-rasa-private
 #   -Console                план и прогон — в консоли, как раньше (для отладки); по умолчанию — в окне
 #   -Spawned                служебный: так setup.ps1 запускает сам себя скрытым процессом
+#   -Resume                 служебный: продолжить прогон после перезагрузки (так запускает задача планировщика, lib\resume.ps1)
 #
 # Обычный запуск (без -Console) — программа без консоли: setup.ps1 запускает себя заново скрытым процессом
 # (с правами администратора, в STA) и отпускает окно, из которого его запустили, оставив в нём одну строку.
@@ -27,7 +28,8 @@ param(
     [switch]$DryRun,
     [string]$DataRoot,
     [switch]$Console,
-    [switch]$Spawned
+    [switch]$Spawned,
+    [switch]$Resume
 )
 
 $ErrorActionPreference = 'Continue'   # Stop ломает нативные команды в PS 5.1; где надо — -ErrorAction Stop явно
@@ -48,6 +50,7 @@ function Get-PbSetupArgs ([switch]$WithPull) {
     if ($NoPull -and -not $WithPull) { $a += '-NoPull' }
     if ($DryRun) { $a += '-DryRun' }
     if ($DataRoot) { $a += @('-DataRoot', "`"$DataRoot`"") }
+    if ($Resume) { $a += '-Resume' }
     return $a
 }
 
@@ -77,6 +80,7 @@ if (-not $isAdmin -or -not $isSta) {
     if ($DryRun) { $argList += '-DryRun' }
     if ($Console) { $argList += '-Console' }
     if ($DataRoot) { $argList += @('-DataRoot', "`"$DataRoot`"") }
+    if ($Resume) { $argList += '-Resume' }
     if ($isAdmin) { Start-Process powershell.exe -ArgumentList $argList }
     else { Start-Process powershell.exe -Verb RunAs -ArgumentList $argList }
     return
@@ -244,6 +248,40 @@ $transcript = Join-Path $script:PB.LogDir "setup_$($script:PB.Stamp).log"
 Start-Transcript -Path $transcript -Force | Out-Null
 
 try {
+    # ---------- незавершённый прогон (Э9, lib\resume.ps1) ----------
+    # -Resume (задача планировщика после входа): вход уже выполнен — автоматический вход больше не нужен до следующей
+    # перезагрузки прогона. Обычный запуск при незавершённом прогоне — спросить: продолжить сейчас или отказаться.
+    # Ни прогона, ни задачи нет, а пароль автоматического входа остался (прогон прервался) — убрать его.
+    $resumeState = Read-PbResume
+    if ($resumeState -and -not (Test-PbResumeOwner $resumeState)) { $resumeState = $null }
+    if ($Resume) {
+        Set-PbAutoLogonArmed $false
+        if (-not $resumeState) {
+            Write-Warn2 'Продолжать нечего: состояние прогона не найдено.'
+            if (-not (Read-PbResume)) { Stop-PbResume }
+            $windowMode = $true
+            return
+        }
+    } elseif ($resumeState) {
+        $left = @($resumeState.Steps | Where-Object { $_.State -in 'reboot', 'wait' }).Count
+        $when = (ConvertTo-PbDate $resumeState.Started).ToString('dd.MM.yyyy HH:mm')
+        $text = "Прогон от $when не завершён: он ждёт перезагрузки, шагов осталось: $left."
+        $go = $false
+        if ($Console) {
+            Write-Warn2 $text
+            $go = (Read-Host '    Продолжить его сейчас? Иначе он будет отменён [Y/n]') -notmatch '^[nNтТ]'
+        } else {
+            Set-PbSplashVisible $false
+            $go = Show-UiMessage -Title 'Незавершённый прогон' -Primary 'Продолжить' -Secondary 'Отменить прогон' -Lines @($text,
+                @{ Text = 'Продолжить можно и без перезагрузки: шаги, которым она нужна, снова попросят её. При отмене оставшиеся шаги не выполняются, а пароль автоматического входа, если он был сохранён, удаляется.'; Tone = 'muted' })
+            Set-PbSplashVisible $true
+        }
+        if ($go) { $Resume = $true } else { Stop-PbResume; $resumeState = $null }
+    } elseif (-not (Test-Path -LiteralPath (Get-PbResumePath))) {   # незавершённый прогон другого пользователя не трогаем
+        Clear-PbAutoLogon
+        if (Test-PbResumeTask) { Unregister-PbResumeTask }
+    }
+
     # свежая версия движка подтягивается в самом начале, до загрузки lib\*.ps1 (см. «самая свежая версия»)
     # Мои данные: подтянуть с GitHub и отправить то, что не ушло в прошлый раз
     if (-not $NoPull -and (Test-PbDataConnected)) {
@@ -278,7 +316,7 @@ try {
     if ($ds.Connected) { Write-Host "  Мои данные: $($script:PB.DataRoot)$(if ($ds.User) { " ($($ds.User))" })$(if ($ds.Pending) { ", не отправлено: $($ds.Pending)" })" -ForegroundColor Gray }
     else { Write-Host '  Мои данные не подключены (подключение — в окне, слева внизу)' -ForegroundColor Gray }
     if ($DryRun) { Write-Host '  РЕЖИМ ПРОВЕРКИ: ничего не меняется' -ForegroundColor Yellow }
-    if (-not (Test-SameUserAsDesktop)) {
+    if (-not $resumeState -and -not (Test-SameUserAsDesktop)) {
         $who = "Tabula Rasa запущена от имени $env:USERNAME, а рабочий стол принадлежит другому пользователю."
         $what = 'Настройки текущего пользователя (Проводник, панель задач, Terminal) будут применены к профилю администратора, а не к профилю того, кто работает за компьютером.'
         Write-Warn2 $who; Write-Warn2 $what
@@ -299,7 +337,16 @@ try {
     }
     # список файлов окно получает само, в фоне: из релиза files «Моих данных». Заставка закрывается, когда окно показано
     Set-PbSplash 'Подготовка окна…' 0.85
-    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -IsDomain $script:PB.IsDomain -RunInWindow (-not $Console)
+    if ($resumeState -and $Console) {
+        # -Console: продолжение — сразу прогон в консоли, без окна
+        $sel = Get-PbResumeSel $resumeState
+        $plan = Get-PbRunPlan $sel $Apps $Tweaks $null
+        Restore-PbResumeSteps $plan $resumeState
+        Write-PbPlan $plan
+        Invoke-PbRun $plan $sel $Apps $Tweaks $null $resumeState
+        return
+    }
+    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -IsDomain $script:PB.IsDomain -RunInWindow (-not $Console) -Resume $resumeState
     if ($script:PB.WindowShownSec) { Write-Host "  Окно открылось через $($script:PB.WindowShownSec) с после запуска." -ForegroundColor DarkGray }
     # план, прогон и итог прошли в окне (lib\gui.ps1 + lib\run.ps1): журнал прогона — logs\run_<дата>.log
     if ($sel -and $sel.RanInWindow) { $windowMode = $true; return }
@@ -345,7 +392,11 @@ finally {
     Write-Host "  Журнал выполнения: $transcript" -ForegroundColor Gray
     Stop-Transcript | Out-Null
 
-    if ($script:PB.NeedReboot) {
+    if ($script:PB.ResumePending) {
+        # Э9: часть шагов ждёт перезагрузки; после входа прогон продолжится сам (задача планировщика)
+        Write-Host '  Часть шагов выполнится после перезагрузки: после входа в Windows прогон продолжится автоматически.' -ForegroundColor Yellow
+        if ((Read-Host '  Перезагрузить сейчас? [Y/n]') -notmatch '^[nNтТ]') { Restart-PbForResume }
+    } elseif ($script:PB.NeedReboot) {
         if ((Read-Host '  Нужна перезагрузка. Перезагрузить сейчас? [Y/n]') -notmatch '^[nNтТ]') { Restart-Computer -Force }
     } else {
         Read-Host '  Готово. Enter — закрыть' | Out-Null

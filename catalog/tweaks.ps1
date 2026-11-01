@@ -206,7 +206,7 @@ $Tweaks = @(
 
     # ============================== Система ==============================
 
-    @{ Id = 'sys.wsl'; Name = 'WSL2 и платформа виртуальных машин (для Docker)'; Desc = 'Включает WSL и платформу виртуальных машин, устанавливает ядро WSL2 (требуется для Docker). Потребуется перезагрузка.'; Group = 'Система'; Os = @('10', '11'); Phase = 'pre'
+    @{ Id = 'sys.wsl'; Name = 'WSL2 и платформа виртуальных машин (для Docker)'; Desc = 'Включает WSL и платформу виртуальных машин, устанавливает ядро WSL2 (требуется для Docker). Потребуется перезагрузка.'; Group = 'Система'; Os = @('10', '11'); Phase = 'pre'; RebootGate = $true
        Check = { @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform' | ForEach-Object { (Get-WindowsOptionalFeature -Online -FeatureName $_ -ErrorAction Stop).State } | Where-Object { $_ -ne 'Enabled' }).Count -eq 0 }
        Apply = {
            foreach ($f in 'Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform') {
