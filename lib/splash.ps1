@@ -25,19 +25,11 @@ function Get-PbSplashXaml {
             $pref = [string]((Get-Content (Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json).Theme)
             if ($pref -eq 'dark') { $dark = $true } elseif ($pref -eq 'light') { $dark = $false }
         } catch { }
-        $r = 0x00; $g = 0x67; $b = 0xC0
-        try {
-            $v = [int64](Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\DWM' 'AccentColor' -ErrorAction Stop) -band 0xFFFFFFFF
-            $r = [int]($v -band 0xFF); $g = [int](($v -shr 8) -band 0xFF); $b = [int](($v -shr 16) -band 0xFF)
-        } catch { }
-        # как в окне: в тёмной теме акцент светлее; текст на плашке — чёрный или белый по контрасту WCAG
-        if ($dark) { $r = [int]($r + (255 - $r) * 0.45); $g = [int]($g + (255 - $g) * 0.45); $b = [int]($b + (255 - $b) * 0.45) }
-        $lin = { param($x) $x = $x / 255; if ($x -le 0.03928) { $x / 12.92 } else { [Math]::Pow(($x + 0.055) / 1.055, 2.4) } }
-        $l = 0.2126 * (& $lin $r) + 0.7152 * (& $lin $g) + 0.0722 * (& $lin $b)
-        $fg = if ((1.05 / ($l + 0.05)) -ge (($l + 0.05) / 0.05)) { '#FFFFFF' } else { '#000000' }
-        $acc = '#{0:X2}{1:X2}{2:X2}' -f $r, $g, $b
-        $c = if ($dark) { @{ Bg = '#202020'; Border = '#383838'; Text = '#FFFFFF'; Muted = '#ABABAB'; Track = '#3A3A3A' } }
-             else { @{ Bg = '#F3F3F3'; Border = '#E5E5E5'; Text = '#1B1B1B'; Muted = '#5F5F5F'; Track = '#E0E0E0' } }
+        # фирменные цвета Tabula Rasa (как Set-UiPalette в lib\gui.ps1): акцент и текст на нём
+        $acc = if ($dark) { '#8B83FF' } else { '#5146E0' }
+        $fg = if ($dark) { '#0B0A1F' } else { '#FFFFFF' }
+        $c = if ($dark) { @{ Bg = '#17191F'; Border = '#252832'; Text = '#ECEEF3'; Muted = '#A1A7B5'; Track = '#262933' } }
+             else { @{ Bg = '#FFFFFF'; Border = '#E3E6EC'; Text = '#15171E'; Muted = '#5A6170'; Track = '#ECEEF3' } }
         $c.Accent = $acc; $c.AccentFg = $fg
     }
     $font = if ($env:windir -and (Test-Path (Join-Path $env:windir 'Fonts\SegUIVar.ttf'))) { 'Segoe UI Variable Text' } else { 'Segoe UI' }

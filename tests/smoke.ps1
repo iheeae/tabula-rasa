@@ -7,6 +7,7 @@
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot
 $env:TR_SMOKE = '1'
+if (-not $env:TR_SMOKE_SHOTS) { $env:TR_SMOKE_SHOTS = Join-Path ([IO.Path]::GetTempPath()) 'tabula-rasa-shots' }
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tabula-rasa-smoke-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 . (Join-Path $root 'lib\splash.ps1'); . (Join-Path $root 'lib\common.ps1'); . (Join-Path $root 'lib\gui.ps1'); . (Join-Path $root 'lib\configs.ps1')
@@ -45,6 +46,13 @@ try {
 }
 $watch.Stop()
 if ($script:SmokeTimeout) { $fail += "окно не закрылось само за 300 с. Сторож:`n" + (($script:WatchLog | Select-Object -Last 25) -join "`n") }
+# контраст: каждый видимый текст на каждом снятом экране в обеих темах (lib\gui.ps1, Find-UiContrastIssues)
+$cf = Join-Path $env:TR_SMOKE_SHOTS 'contrast.txt'
+if (Test-Path $cf) {
+    $cl = @(Get-Content $cf -Encoding UTF8 | Where-Object { $_ })
+    if ($cl.Count) { $fail += "контраст текста ниже нормы WCAG ($($cl.Count)):`n" + (($cl | Select-Object -First 30) -join "`n") }
+    else { Write-Host 'Контраст текста: всё в норме' -ForegroundColor Green }
+}
 if ($env:TR_SMOKE_STEP -like 'ошибка*') { $fail += $env:TR_SMOKE_STEP }
 elseif ($env:TR_SMOKE_STEP -ne 'закрытие') { $fail += "проверка окна остановилась на шаге «$env:TR_SMOKE_STEP»" }
 foreach ($f in @(Get-ChildItem $script:PB.LogDir -Filter 'ui-error_*.txt' -ErrorAction SilentlyContinue)) {

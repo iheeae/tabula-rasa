@@ -49,6 +49,9 @@ Windows и файлов. Название в интерфейсе и текст�
   по ним `Invoke-Tweak` пишет «уже было» / «применено» / «изменено N из M», программы — по `Get-PbWingetEntry` до и после.
 - **Зависимости** — поле `Requires` в каталоге (программы и твики), а не текст в описании: в окне отмечаются вместе
   (`AutoAdded`, в сохранение не пишутся), в плане — пометка, если не отмечены; `tests/ci.ps1` проверяет id и циклы.
+- **Цвета** — только кисти палитры (`Set-UiPalette`: Text, TextMuted, Accent, Success, Warning, Danger…), никаких
+  зашитых цветов и системного чёрного: у текста цвет задаётся явно или наследуется от окна/списка с `Foreground = Text`.
+  Контраст текстов в обеих темах проверяет `tests/smoke.ps1` в CI, снимки — в ветке `ci-screenshots`.
 - **Отчёт** — `lib/report.ps1`, один механизм для окна, `-Console` и будущего клиентского отчёта; без личного, кроме
   имени компьютера (`Protect-PbReportText`), всё экранируется.
 - **Старые места** (`C:\pc-base`, `C:\pc-base-private`, `%LOCALAPPDATA%\pc-base`, `%ProgramData%\pc-base`) — в `$script:PbLegacy`.
@@ -106,7 +109,8 @@ lib/selfremove.ps1   удаление с компьютера: Get-PbSelfRemoveP
 lib/splash.ps1       заставка в своём STA-потоке (Start-/Set-/Close-PbSplash), Show-PbFatal; грузится до остального lib
 lib/files.ps1        «Файлы»: релиз files репозитория данных (Get-PbFiles, Save-PbFiles — загрузка со сверкой SHA-256, ConvertTo-PbAssetName)
 lib/gui.ps1          окно (Show-SelectionDialog: «Установка | Снятие настроек», план/прогон/итог — RunPane), «Добавить программу»,
-                     «Откат изменений» (Show-UndoDialog), значок «TR», тема (на лету, Mica, высокая контрастность), ui.json;
+                     «Откат изменений» (Show-UndoDialog), значок «TR», тема (фирменная палитра Set-UiPalette, кнопка в шапке,
+                     высокая контрастность), ui.json; снимки и контраст текстов для CI (Save-UiShot, Find-UiContrastIssues);
                      фоновые задачи — runspace + DispatcherTimer; скриптблоки твиков в фоне — только свои (tweaks.ps1 заново)
 lib/ui/              main/dialog/addapp.xaml, theme.xaml (стили), model.cs (модель для привязок)
 lib/configs.ps1      настройки программ: Export-*/Set-* по полю Config, фильтр секретов, снятие через временную папку

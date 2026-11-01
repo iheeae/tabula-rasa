@@ -236,7 +236,7 @@ namespace PcBase
                     case "same": return "\uE930";
                     case "skip": return "\uE738";
                     case "error": return "\uE783";
-                    default: return "\uE91F";
+                    default: return "\uEA3A";   // контурный кружок: «ожидает» не спорит с итогами шагов
                 }
             }
         }

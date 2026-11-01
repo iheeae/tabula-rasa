@@ -24,8 +24,10 @@ $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 # ---------- оформление ----------
 
 # тема: светлая/тёмная — по выбору в окне (кнопка в шапке, $script:PbThemePref = light | dark, хранится в ui.json)
-# или как в Windows (auto); акцент из DWM (запасной #0067C0), Segoe UI Variable, если есть
+# или как в Windows (auto). Цвета — фирменные (Set-UiPalette), не системный акцент: так контраст везде предсказуем.
+# Segoe UI Variable, если есть
 $script:PbThemePref = $null
+$script:PbBrandAccent = '#5146E0'   # фирменный индиго Tabula Rasa (значок, заставка, светлая тема)
 function Get-UiTheme {
     if ($null -eq $script:PbThemePref) {
         $script:PbThemePref = 'auto'
@@ -35,11 +37,7 @@ function Get-UiTheme {
     $dark = $false
     try { $dark = (Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'AppsUseLightTheme' -ErrorAction Stop) -eq 0 } catch { }
     if ($script:PbThemePref -eq 'dark') { $dark = $true } elseif ($script:PbThemePref -eq 'light') { $dark = $false }
-    $accent = [Windows.Media.Color]::FromRgb(0x00, 0x67, 0xC0)
-    try {
-        $v = [int64](Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\DWM' 'AccentColor' -ErrorAction Stop) -band 0xFFFFFFFF
-        $accent = [Windows.Media.Color]::FromRgb([byte]($v -band 0xFF), [byte](($v -shr 8) -band 0xFF), [byte](($v -shr 16) -band 0xFF))
-    } catch { }
+    $accent = [Windows.Media.ColorConverter]::ConvertFromString($script:PbBrandAccent)
     # файл шрифта вместо перечисления всех системных шрифтов: то занимало заметную часть старта окна
     $font = if (Test-Path (Join-Path $env:windir 'Fonts\SegUIVar.ttf')) { 'Segoe UI Variable Text' } else { 'Segoe UI' }
     return @{ Dark = $dark; Accent = $accent; Font = $font }
@@ -47,20 +45,6 @@ function Get-UiTheme {
 
 # кисти, на которые ссылается theme.xaml (DynamicResource)
 function Set-UiPalette ($Res, $Theme) {
-    function Mix ($A, $B, [double]$T) {
-        [Windows.Media.Color]::FromRgb([byte]($A.R + ($B.R - $A.R) * $T), [byte]($A.G + ($B.G - $A.G) * $T), [byte]($A.B + ($B.B - $A.B) * $T))
-    }
-    function Lum ($C) { (0.2126 * $C.R + 0.7152 * $C.G + 0.0722 * $C.B) / 255 }
-    # относительная яркость по WCAG и текст на заливке: чёрный или белый — у кого контраст выше (порог по Lum давал
-    # белый текст на светлых акцентах: 2,4:1 в тёмной теме при норме 4,5:1)
-    function RelLum ($C) {
-        $f = { param($v) $x = $v / 255; if ($x -le 0.03928) { $x / 12.92 } else { [Math]::Pow(($x + 0.055) / 1.055, 2.4) } }
-        0.2126 * (& $f $C.R) + 0.7152 * (& $f $C.G) + 0.0722 * (& $f $C.B)
-    }
-    function Get-OnColor ($C) { $l = RelLum $C; if ((1.05 / ($l + 0.05)) -ge (($l + 0.05) / 0.05)) { [Windows.Media.Colors]::White } else { [Windows.Media.Colors]::Black } }
-
-    $white = [Windows.Media.Colors]::White; $black = [Windows.Media.Colors]::Black
-    $a = $Theme.Accent
     # высокая контрастность: только системные цвета, свои не подмешиваются
     if ([Windows.SystemParameters]::HighContrast) {
         $sc = [Windows.SystemColors]
@@ -68,38 +52,34 @@ function Set-UiPalette ($Res, $Theme) {
                   Border = $sc::WindowTextColor; Control = $sc::ControlColor; ControlHover = $sc::ControlColor; ControlPressed = $sc::ControlColor
                   ControlBorder = $sc::WindowTextColor; ControlStrong = $sc::WindowTextColor; Text = $sc::WindowTextColor; TextMuted = $sc::GrayTextColor
                   PillBg = $sc::WindowColor; Danger = $sc::HotTrackColor; DangerSoft = $sc::WindowColor; ScrollThumb = $sc::ControlDarkColor
-                  Accent = $sc::HighlightColor; AccentFg = $sc::HighlightTextColor; AccentText = $sc::HotTrackColor; AccentSoft = $sc::WindowColor; Focus = $sc::WindowTextColor }
+                  Accent = $sc::HighlightColor; AccentFg = $sc::HighlightTextColor; AccentText = $sc::HotTrackColor; AccentSoft = $sc::WindowColor; Focus = $sc::WindowTextColor
+                  Success = $sc::WindowTextColor; SuccessSoft = $sc::WindowColor; Warning = $sc::WindowTextColor; WarningSoft = $sc::WindowColor }
         foreach ($k in $map.Keys) { $b = New-Object Windows.Media.SolidColorBrush $map[$k]; $b.Freeze(); $Res[$k] = $b.PSObject.BaseObject }
+        $Res['ShadowColor'] = [Windows.SystemColors]::WindowTextColor
         $Res['UiFont'] = (New-Object Windows.Media.FontFamily $Theme.Font).PSObject.BaseObject
         return
     }
+    # фирменная палитра. Контраст текста к фону — не ниже 4,5:1 во всех сочетаниях (Text/TextMuted/AccentText/статусы
+    # на Bg, Surface, SurfaceStrong, PillBg); проверяется в CI по живому окну (tests\smoke.ps1, Find-UiContrastIssues)
     if ($Theme.Dark) {
-        $p = @{ Bg = '#202020'; Surface = '#2B2B2B'; SurfaceHover = '#323232'; SurfaceStrong = '#383838'; NavHover = '#2D2D2D'
-                Border = '#383838'; Control = '#2D2D2D'; ControlHover = '#353535'; ControlPressed = '#282828'; ControlBorder = '#454545'
-                ControlStrong = '#9A9A9A'; Text = '#FFFFFF'; TextMuted = '#ABABAB'; PillBg = '#3A3A3A'; Danger = '#FF99A4'
-                DangerSoft = '#442726'; ScrollThumb = '#5C5C5C' }
-        $fill = Mix $a $white 0.45
-        $fillFg = Get-OnColor $fill
-        $text = Mix $a $white 0.5
-        $soft = [Windows.Media.Color]::FromArgb(0x33, $text.R, $text.G, $text.B)
+        $p = @{ Bg = '#0F1015'; Surface = '#17191F'; SurfaceHover = '#1E2028'; SurfaceStrong = '#262933'; NavHover = '#1C1E25'
+                Border = '#252832'; Control = '#1D1F27'; ControlHover = '#262933'; ControlPressed = '#1A1C23'; ControlBorder = '#363A46'
+                ControlStrong = '#8D94A3'; Text = '#ECEEF3'; TextMuted = '#A1A7B5'; PillBg = '#232630'; ScrollThumb = '#3A3E4A'
+                Danger = '#FF8F85'; DangerSoft = '#3A1E1E'; Success = '#5CD18A'; SuccessSoft = '#16301F'; Warning = '#F2B75B'; WarningSoft = '#3A2C14'
+                Accent = '#8B83FF'; AccentFg = '#0B0A1F'; AccentText = '#A9A3FF'; AccentSoft = '#2E2E4C'; Focus = '#A9A3FF'; Shadow = '#000000' }
     } else {
-        $p = @{ Bg = '#F3F3F3'; Surface = '#FFFFFF'; SurfaceHover = '#F5F5F5'; SurfaceStrong = '#E6E6E6'; NavHover = '#EBEBEB'
-                Border = '#E5E5E5'; Control = '#FBFBFB'; ControlHover = '#F3F3F3'; ControlPressed = '#EDEDED'; ControlBorder = '#D1D1D1'
-                ControlStrong = '#8A8A8A'; Text = '#1B1B1B'; TextMuted = '#5F5F5F'; PillBg = '#EDEDED'; Danger = '#C42B1C'
-                DangerSoft = '#FDE7E9'; ScrollThumb = '#C2C2C2' }
-        $fill = if ((Lum $a) -gt 0.45) { Mix $a $black 0.35 } else { $a }
-        $fillFg = Get-OnColor $fill
-        $text = $fill
-        $soft = [Windows.Media.Color]::FromArgb(0x1F, $fill.R, $fill.G, $fill.B)
+        $p = @{ Bg = '#F3F4F7'; Surface = '#FFFFFF'; SurfaceHover = '#F7F8FA'; SurfaceStrong = '#ECEEF3'; NavHover = '#E9EBF0'
+                Border = '#E3E6EC'; Control = '#FFFFFF'; ControlHover = '#F4F5F8'; ControlPressed = '#ECEEF3'; ControlBorder = '#D5D9E1'
+                ControlStrong = '#868D9C'; Text = '#15171E'; TextMuted = '#5A6170'; PillBg = '#EEF0F4'; ScrollThumb = '#C3C8D1'
+                Danger = '#C4271B'; DangerSoft = '#FCE9E7'; Success = '#146C34'; SuccessSoft = '#E3F4E8'; Warning = '#8F5400'; WarningSoft = '#FDF1DC'
+                Accent = $script:PbBrandAccent; AccentFg = '#FFFFFF'; AccentText = '#4338CA'; AccentSoft = '#E7E5FB'; Focus = '#5146E0'; Shadow = '#1B1F2A' }
     }
-    $colors = @{ Accent = $fill; AccentFg = $fillFg; AccentText = $text; AccentSoft = $soft }
-    foreach ($k in $p.Keys) { $colors[$k] = [Windows.Media.ColorConverter]::ConvertFromString($p[$k]) }
-    $colors.Focus = $colors.Text
     # BaseObject: иначе в словарь попадает обёртка PSObject и WPF видит строку вместо кисти
-    foreach ($k in $colors.Keys) {
-        $b = New-Object Windows.Media.SolidColorBrush $colors[$k]; $b.Freeze()
+    foreach ($k in $p.Keys) {
+        $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($p[$k])); $b.Freeze()
         $Res[$k] = $b.PSObject.BaseObject
     }
+    $Res['ShadowColor'] = ([Windows.Media.ColorConverter]::ConvertFromString($p.Shadow)).PSObject.BaseObject
     $Res['UiFont'] = (New-Object Windows.Media.FontFamily $Theme.Font).PSObject.BaseObject
 }
 
@@ -210,6 +190,88 @@ function Write-PbUiError ($Exception) {
     } catch { }
 }
 
+# ---------- проверка вида (tests\smoke.ps1 в CI): снимок окна и контраст всех видимых текстов ----------
+
+# контраст по WCAG 2.1 между двумя цветами
+function Get-UiContrast ($A, $B) {
+    $l = { param($c) $f = { param($v) $x = $v / 255; if ($x -le 0.03928) { $x / 12.92 } else { [Math]::Pow(($x + 0.055) / 1.055, 2.4) } }
+           0.2126 * (& $f $c.R) + 0.7152 * (& $f $c.G) + 0.0722 * (& $f $c.B) }
+    $x = & $l $A; $y = & $l $B
+    return ([Math]::Max($x, $y) + 0.05) / ([Math]::Min($x, $y) + 0.05)
+}
+
+# цвет $Top с прозрачностью $Alpha (0–1) поверх непрозрачного $Under
+function Join-UiColor ($Top, [double]$Alpha, $Under) {
+    [Windows.Media.Color]::FromRgb([byte]($Top.R * $Alpha + $Under.R * (1 - $Alpha)), [byte]($Top.G * $Alpha + $Under.G * (1 - $Alpha)), [byte]($Top.B * $Alpha + $Under.B * (1 - $Alpha)))
+}
+
+# фон под элементом: кисти Border / Panel / Control вверх по дереву, полупрозрачные смешиваются; $Fallback — фон окна
+function Get-UiBackColor ($El, $Fallback) {
+    $layers = New-Object System.Collections.ArrayList
+    $p = [Windows.Media.VisualTreeHelper]::GetParent($El)
+    while ($p) {
+        $b = $null
+        if ($p -is [Windows.Controls.Border]) { $b = $p.Background }
+        elseif ($p -is [Windows.Controls.Panel]) { $b = $p.Background }
+        if ($b -is [Windows.Media.SolidColorBrush] -and $b.Color.A -gt 0) {
+            [void]$layers.Add(@{ C = $b.Color; A = ($b.Color.A / 255.0) * $b.Opacity })
+            if ($b.Color.A -eq 255 -and $b.Opacity -ge 1) { break }
+        }
+        $p = [Windows.Media.VisualTreeHelper]::GetParent($p)
+    }
+    $c = $Fallback
+    for ($i = $layers.Count - 1; $i -ge 0; $i--) { $c = Join-UiColor $layers[$i].C $layers[$i].A $c }
+    return $c
+}
+
+# тексты с недостаточным контрастом: обычный текст — 4,5:1, крупный (от 24 px или от 18,7 px полужирный) и значки — 3:1.
+# Отключённые элементы не проверяются (WCAG их не требует)
+function Find-UiContrastIssues ($Root, $Fallback) {
+    $out = New-Object System.Collections.ArrayList
+    $stack = New-Object System.Collections.Stack
+    $stack.Push($Root)
+    while ($stack.Count) {
+        $v = $stack.Pop()
+        $n = [Windows.Media.VisualTreeHelper]::GetChildrenCount($v)
+        for ($i = 0; $i -lt $n; $i++) { $stack.Push([Windows.Media.VisualTreeHelper]::GetChild($v, $i)) }
+        if ($v -isnot [Windows.Controls.TextBlock]) { continue }
+        if (-not $v.IsVisible -or -not $v.IsEnabled -or $v.ActualWidth -lt 1 -or -not $v.Text) { continue }
+        $fgb = $v.Foreground
+        if ($fgb -isnot [Windows.Media.SolidColorBrush]) { continue }
+        $bg = Get-UiBackColor $v $Fallback
+        $op = 1.0; $q = $v
+        while ($q) { if ($q -is [Windows.UIElement]) { $op *= $q.Opacity }; $q = [Windows.Media.VisualTreeHelper]::GetParent($q) }
+        $fg = Join-UiColor $fgb.Color (($fgb.Color.A / 255.0) * $fgb.Opacity * $op) $bg
+        $ratio = Get-UiContrast $fg $bg
+        $icon = [string]$v.FontFamily -match 'Icons|MDL2'
+        $large = $v.FontSize -ge 24 -or ($v.FontSize -ge 18.6 -and $v.FontWeight.ToOpenTypeWeight() -ge 600)
+        $need = if ($icon -or $large) { 3.0 } else { 4.5 }
+        if ($ratio -lt $need) {
+            $t = ([string]$v.Text -replace '\s+', ' '); if ($t.Length -gt 50) { $t = $t.Substring(0, 50) + '…' }
+            [void]$out.Add(("{0:N2}:1 (нужно {1}) текст {2} на фоне {3}: «{4}»" -f $ratio, $need, $fg, $bg, $t))
+        }
+    }
+    return @($out | Select-Object -Unique)
+}
+
+# снимок элемента в PNG; фон окна подкладывается снизу (он бывает прозрачным)
+function Save-UiShot ($El, $Back, [string]$Path) {
+    $w = [int][Math]::Ceiling($El.ActualWidth); $h = [int][Math]::Ceiling($El.ActualHeight)
+    if ($w -lt 1 -or $h -lt 1) { return }
+    $rect = New-Object Windows.Rect 0, 0, $w, $h
+    $dv = New-Object Windows.Media.DrawingVisual
+    $dc = $dv.RenderOpen()
+    $dc.DrawRectangle((New-Object Windows.Media.SolidColorBrush $Back), $null, $rect)
+    $dc.Close()
+    $bmp = New-Object Windows.Media.Imaging.RenderTargetBitmap $w, $h, 96, 96, ([Windows.Media.PixelFormats]::Pbgra32)
+    $bmp.Render($dv)
+    $bmp.Render($El)
+    $enc = New-Object Windows.Media.Imaging.PngBitmapEncoder
+    $enc.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bmp))
+    $fs = [IO.File]::Create($Path)
+    try { $enc.Save($fs) } finally { $fs.Dispose() }
+}
+
 function New-UiWindow ([string]$Xaml, $Theme) {
     $w = Read-Xaml $Xaml
     $w.Icon = $Theme.Icon
@@ -279,7 +341,8 @@ $script:PbCatIcons = @{
 function Get-CatIcon ([string]$Name) { if ($script:PbCatIcons.ContainsKey($Name)) { [string]$script:PbCatIcons[$Name] } else { [string][char]0xE9CE } }
 
 # спокойная палитра плиток-монограмм: цвет выбирается по Id и от запуска к запуску не меняется
-$script:PbMonoColors = @('#5B6C8F', '#6A7F5B', '#8F6A5B', '#5B8A8F', '#7A5B8F', '#8F7F5B', '#5B7A8F', '#8F5B6E', '#6E8F5B', '#5B5F8F')
+# плитки-монограммы: насыщенные тона, белая буква — не ниже 5:1 (было 3,9:1 на светлых)
+$script:PbMonoColors = @('#4F46E5', '#7C3AED', '#B4237A', '#C2410C', '#B45309', '#4D7C0F', '#047857', '#0F766E', '#0E7490', '#1D4ED8', '#6D28D9', '#BE123C', '#57534E', '#475569')
 function Get-MonoBrush ([string]$Id) {
     $h = 0; foreach ($c in $Id.ToCharArray()) { $h = ($h * 31 + [int]$c) % 1000003 }
     $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($script:PbMonoColors[$h % $script:PbMonoColors.Count]))
@@ -472,19 +535,6 @@ function Invoke-UiFade ($El) {
     $tt.BeginAnimation([Windows.Media.TranslateTransform]::YProperty, $mv)
 }
 
-# Windows 11 22H2+: Mica под окном (фон клиентской области прозрачный, карточки и панели — на своих подложках).
-# Windows 10, высокая контрастность, ошибка — плотный фон, как раньше
-function Set-UiBackdrop ($Win) {
-    if ([Environment]::OSVersion.Version.Build -lt 22621 -or [Windows.SystemParameters]::HighContrast) { return }
-    try {
-        $hwnd = (New-Object Windows.Interop.WindowInteropHelper $Win).Handle
-        if (-not [PcBase.Native]::SetMica($hwnd)) { return }
-        [PcBase.Native]::ExtendFrame($hwnd)
-        [Windows.Interop.HwndSource]::FromHwnd($hwnd).CompositionTarget.BackgroundColor = [Windows.Media.Colors]::Transparent
-        $Win.Background = [Windows.Media.Brushes]::Transparent
-    } catch { }
-}
-
 # размер, положение, развёрнутость, последний раздел: %LOCALAPPDATA%\tabula-rasa\ui.json
 function Get-UiStatePath { Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json' }
 function Read-UiState {
@@ -637,7 +687,7 @@ function Show-SelectionDialog {
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
         'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'TabSwitch', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
         'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
-        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunSelfRemove', 'RunApply', 'RunClose', 'RunStatus',
+        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunMore', 'RunSideCol', 'RunSide', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
         'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
@@ -1896,10 +1946,13 @@ function Show-SelectionDialog {
 
     function Set-RunButtons ([string]$State) {
         $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run')
-                  RunOpenReport = @('done'); RunOpenFolder = @('done'); RunReboot = @('done'); RunSelfRemove = @('done'); RunClose = @('done') }
+                  RunOpenReport = @('done'); RunMore = @('done'); RunReboot = @('done'); RunClose = @('done') }
         foreach ($k in $vis.Keys) { $ctl[$k].Visibility = if ($vis[$k] -contains $State) { 'Visible' } else { 'Collapsed' } }
         # журнал — только во время прогона и в итоге; на экране плана он пуст
         $ctl.LogToggle.Visibility = if ($State -eq 'plan') { 'Collapsed' } else { 'Visible' }
+        # на экране плана колонки журнала нет: шаги — на всю ширину
+        $ctl.RunSideCol.Width = if ($State -eq 'plan') { New-Object Windows.GridLength 0 } else { New-Object Windows.GridLength 360 }
+        $ctl.RunSide.Visibility = if ($State -eq 'plan') { 'Collapsed' } else { 'Visible' }
         if ($State -eq 'plan') { $ctl.RunLog.Visibility = 'Collapsed'; $ctl.LogToggle.Content = 'Показать журнал' }
         # во время прогона выбор и режимы не трогаются
         foreach ($c in $ctl.TabInstall, $ctl.TabCapture, $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn, $ctl.MoreBtn) { $c.IsEnabled = $State -ne 'run' }
@@ -2138,9 +2191,21 @@ function Show-SelectionDialog {
     $ctl.RunOpenLog.add_Click({ Start-Process explorer.exe $script:PB.LogDir })
     # через explorer.exe: браузер открывается от имени пользователя, а не с правами администратора, как у этого процесса
     $ctl.RunOpenReport.add_Click({ if ($ui.Report -and (Test-Path -LiteralPath $ui.Report)) { Start-Process explorer.exe "`"$($ui.Report)`"" } })
-    $ctl.RunOpenFolder.add_Click({
+    function Open-ReportFolder {
         if ($ui.Report -and (Test-Path -LiteralPath $ui.Report)) { Start-Process explorer.exe "/select,`"$($ui.Report)`"" }
         else { $d = Get-PbReportDir; if (-not (Test-Path $d)) { $d = $script:PB.LogDir }; Start-Process explorer.exe "`"$d`"" }
+    }
+    $ctl.RunMore.add_Click({
+        $m = $ctl.RunMore.ContextMenu
+        $m.Items.Clear()
+        foreach ($p in @(@('Открыть папку с отчётами', 'folder'), @('Удалить Tabula Rasa с этого компьютера…', 'remove-self'))) {
+            $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi)
+        }
+        $m.PlacementTarget = $ctl.RunMore; $m.IsOpen = $true
+    })
+    $ctl.RunMore.ContextMenu.AddHandler([Windows.Controls.MenuItem]::ClickEvent, [Windows.RoutedEventHandler]{
+        param($s, $e)
+        switch ([string]$e.Source.Tag) { 'folder' { Open-ReportFolder } 'remove-self' { Invoke-SelfRemove } }
     })
     $ctl.RunClose.add_Click({ $win.DialogResult = $true })
     # удаление программы: не во время прогона; запущено — окно закрывается, чтобы скрипт очистки мог удалить папку
@@ -2151,7 +2216,6 @@ function Show-SelectionDialog {
             $win.DialogResult = $true
         }
     }
-    $ctl.RunSelfRemove.add_Click({ Invoke-SelfRemove })
     $ctl.RunReboot.add_Click({
         if (Show-UiMessage -Owner $win -Title 'Перезагрузить компьютер?' -Primary 'Перезагрузить' -Secondary 'Позже' -SafeDefault -Lines @('Несохранённые данные в других программах будут потеряны.')) { Restart-Computer -Force }
     })
@@ -2304,7 +2368,6 @@ function Show-SelectionDialog {
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
     if ($saved -and $saved.Nav -and $cats.Contains([string]$saved.Nav)) { $start = $cats[[string]$saved.Nav] }
     $ctl.Nav.SelectedItem = $start
-    $win.add_SourceInitialized({ Set-UiBackdrop $win })
     $win.add_ContentRendered({
         # время от старта процесса до окна — в журнал выполнения (setup.ps1); цель — меньше 2 с
         try { $script:PB.WindowShownSec = [Math]::Round(((Get-Date) - (Get-Process -Id $PID).StartTime).TotalSeconds, 1) } catch { }
@@ -2349,15 +2412,60 @@ function Show-SelectionDialog {
                         $env:TR_SMOKE_STEP = 'тема'
                         $ctl.ThemeBtn.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
                         $ctl.ThemeBtn.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
-                        $env:TR_SMOKE_STEP = 'план'
-                        $c = Get-RunChoice
-                        if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
-                        $env:TR_SMOKE_STEP = 'журнал'
-                        $ctl.RunLog.Visibility = 'Visible'
-                        $ctl.RunLog.AppendText(((1..80 | ForEach-Object { "строка журнала $_" }) -join "`r`n"))
-                        $win.UpdateLayout()
-                        if ($ctl.RunLog.ActualHeight -lt 120) { throw "журнал выполнения слишком низкий: $([int]$ctl.RunLog.ActualHeight) px" }
-                        Write-Host "  smoke: журнал $([int]$ctl.RunLog.ActualHeight) px"
+                        # снимки экранов и контраст текста в обеих темах (папка TR_SMOKE_SHOTS)
+                        $shots = $env:TR_SMOKE_SHOTS
+                        if ($shots) { New-Item -ItemType Directory -Path $shots -Force | Out-Null }
+                        $issues = New-Object System.Collections.ArrayList
+                        $shot = {
+                            param($Name)
+                            $win.UpdateLayout()
+                            $back = (Get-UiBackColor $ctl.List ([Windows.Media.Colors]::White))
+                            $wb = [Windows.Application]::Current.Resources['Bg']; if ($wb) { $back = $wb.Color }
+                            foreach ($x in (Find-UiContrastIssues $win.Content $back)) { [void]$issues.Add("$Name — $x") }
+                            if ($shots) { Save-UiShot $win.Content $back (Join-Path $shots "$Name.png") }
+                        }
+                        foreach ($th in 'light', 'dark') {
+                            $env:TR_SMOKE_STEP = "снимки, тема $th"
+                            $script:PbThemePref = $th; Update-Theme
+                            Show-Pane 'select'; Set-RunButtons 'plan'
+                            $appCat = @($nav | Where-Object { $_.Kind -eq 'cat' -and $_.Section -eq 'apps' } | Select-Object -First 1)
+                            if ($appCat) { Select-Nav $appCat[0] }
+                            $sel = @($items | Where-Object { $_.Kind -eq 'app' -and $_.CatKey -eq $ui.Cat -and $_.IsLocked } | Select-Object -First 1)
+                            if (-not $sel) { $sel = @($items | Where-Object { $_.Kind -eq 'app' -and $_.CatKey -eq $ui.Cat } | Select-Object -First 1) }
+                            if ($sel) { $ctl.List.SelectedItem = $sel[0] }
+                            & $shot "$th-1-catalog"
+                            $twCat = @($nav | Where-Object { $_.Kind -eq 'cat' -and $_.Section -eq 'tweaks' } | Select-Object -First 1)
+                            if ($twCat) { Select-Nav $twCat[0]; $t1 = @($items | Where-Object { $_.CatKey -eq $ui.Cat } | Select-Object -First 1); if ($t1) { $ctl.List.SelectedItem = $t1[0] } }
+                            & $shot "$th-2-tweaks"
+                            Select-Nav $navSummary
+                            & $shot "$th-3-summary"
+                            $c = Get-RunChoice
+                            if ($c) { Show-Plan $c }
+                            & $shot "$th-4-plan"
+                            Set-RunButtons 'done'
+                            $ctl.RunLog.Visibility = 'Visible'
+                            if (-not $ctl.RunLog.Text) { $ctl.RunLog.AppendText(((1..80 | ForEach-Object { "==> строка журнала ${_}: установка программы, ограничение 15 мин" }) -join "`r`n")) }
+                            & $shot "$th-5-log"
+                            $win.UpdateLayout()
+                            if ($ctl.RunLog.ActualHeight -lt 120) { throw "журнал выполнения слишком низкий: $([int]$ctl.RunLog.ActualHeight) px" }
+                            Show-Pane 'select'; Set-RunButtons 'plan'
+                            $ctl.TabCapture.IsChecked = $true
+                            & $shot "$th-6-capture"
+                            $ctl.TabInstall.IsChecked = $true
+                            # диалог — без ShowDialog: показать, снять, закрыть
+                            $d = New-UiWindow 'dialog.xaml' (Initialize-Ui)
+                            $d.Owner = $win; $d.FindName('Head').Text = 'Применить к PC-01?'
+                            foreach ($ln in @('Программ: 3, с моими настройками: 1', 'Настроек Windows: 5')) { $tb = New-Object Windows.Controls.TextBlock; $tb.Text = $ln; $tb.Margin = '0,4,0,0'; [void]$d.FindName('Body').Children.Add($tb) }
+                            $tb = New-Object Windows.Controls.TextBlock; $tb.Text = 'Изменения будут применены сразу.'; $tb.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'TextMuted'); [void]$d.FindName('Body').Children.Add($tb)
+                            $d.FindName('Primary').Content = 'Применить'; $d.FindName('Secondary').Content = 'Назад'
+                            $d.Show(); $d.UpdateLayout()
+                            foreach ($x in (Find-UiContrastIssues $d.Content ([Windows.Application]::Current.Resources['Bg'].Color))) { [void]$issues.Add("$th-dialog — $x") }
+                            if ($shots) { Save-UiShot $d.Content ([Windows.Application]::Current.Resources['Bg'].Color) (Join-Path $shots "$th-7-dialog.png") }
+                            $d.Close()
+                        }
+                        $script:PbThemePref = 'auto'; Update-Theme
+                        Write-Host "  smoke: снимки готовы, замечаний по контрасту: $($issues.Count)"
+                        if ($shots) { [IO.File]::WriteAllLines((Join-Path $shots 'contrast.txt'), [string[]]@($issues), (New-Object Text.UTF8Encoding $false)) }
                         $env:TR_SMOKE_STEP = 'план показан'
                         return
                     }

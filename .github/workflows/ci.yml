@@ -21,6 +21,8 @@ jobs:
   windows:
     if: github.event_name != 'schedule'
     runs-on: windows-latest
+    permissions:
+      contents: write   # снимки окна — в служебную ветку ci-screenshots
     steps:
       - uses: actions/checkout@v5
       - name: Проверки из CLAUDE.md (Windows PowerShell 5.1)
@@ -55,6 +57,7 @@ jobs:
         timeout-minutes: 10
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'smoke.log'
+          $env:TR_SMOKE_SHOTS = Join-Path $env:RUNNER_TEMP 'shots'
           powershell -NoProfile -STA -ExecutionPolicy Bypass -File ./tests/smoke.ps1 *>&1 | Tee-Object -FilePath $log
           $code = $LASTEXITCODE
           if ($code) {
@@ -62,6 +65,28 @@ jobs:
             Write-Host "::error title=tests/smoke.ps1, последние строки::$t"
             exit 1
           }
+      # снимки окна (обе темы) и отчёт о контрасте — в ветку ci-screenshots, папка по имени ветки; ветка служебная, перезаписывается
+      - name: Снимки окна → ветка ci-screenshots
+        if: always() && github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:RUNNER_TEMP 'shots'
+          if (-not (Test-Path $src)) { Write-Host 'снимков нет'; exit 0 }
+          $w = Join-Path $env:RUNNER_TEMP 'shots-repo'
+          git clone -q --depth 1 --branch ci-screenshots "https://x-access-token:$env:GH_TOKEN@github.com/$env:GITHUB_REPOSITORY.git" $w 2>$null
+          if (-not (Test-Path (Join-Path $w '.git'))) { git init -q $w; git -C $w checkout -q -b ci-screenshots; git -C $w remote add origin "https://x-access-token:$env:GH_TOKEN@github.com/$env:GITHUB_REPOSITORY.git" }
+          $dir = Join-Path $w ($env:GITHUB_REF_NAME -replace '[^\w.-]', '_')
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item (Join-Path $src '*') $dir
+          Set-Content (Join-Path $dir 'commit.txt') $env:GITHUB_SHA
+          git -C $w config user.name 'github-actions[bot]'
+          git -C $w config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C $w add -A
+          git -C $w commit -q -m "Снимки окна: $env:GITHUB_REF_NAME $($env:GITHUB_SHA.Substring(0, 7))"
+          git -C $w push -q origin ci-screenshots
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: PSScriptAnalyzer (ошибки)
         shell: powershell
         run: |

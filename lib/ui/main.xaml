@@ -18,7 +18,7 @@
 
         <!-- ===== шапка: три зоны, которые не перекрываются ===== -->
         <!-- слева — значок, название, чипы (сжимаются из gui.ps1 Update-HostChips); по центру — режим; справа — поиск и действия -->
-        <Border Grid.Row="0" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
+        <Border Grid.Row="0" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
             <Grid Margin="24,14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" MinWidth="140"/>
@@ -198,13 +198,14 @@
                         </StackPanel>
                     </Grid>
                     <!-- фильтры по статусу программ (lib\status.ps1); видны в разделе «Программы» и в поиске -->
-                    <StackPanel x:Name="FilterBar" Grid.Row="2" Orientation="Horizontal" Margin="24,0,24,8" Visibility="Collapsed">
+                    <!-- WrapPanel: в узком окне «Отметить обновления» и счётчик переходят на вторую строку, а не обрезаются -->
+                    <WrapPanel x:Name="FilterBar" Grid.Row="2" Orientation="Horizontal" Margin="24,0,24,8" Visibility="Collapsed">
                         <CheckBox x:Name="FilterMissing" Content="Не установленные" Margin="0,0,16,0" VerticalAlignment="Center"/>
                         <CheckBox x:Name="FilterUpdates" Content="Есть обновления" Margin="0,0,16,0" VerticalAlignment="Center"/>
                         <Button x:Name="MarkUpdates" Content="Отметить обновления" Visibility="Collapsed"
                                 ToolTip="Отметить все программы, для которых есть обновление: они будут обновлены через winget"/>
                         <TextBlock x:Name="StatusScan" Style="{StaticResource Caption}" Margin="16,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
+                    </WrapPanel>
                     <ListBox x:Name="List" Grid.Row="3" Padding="24,0,16,16" ItemContainerStyle="{StaticResource CardItem}"
                              KeyboardNavigation.TabNavigation="Once">
                         <ListBox.GroupStyle>
@@ -292,8 +293,20 @@
                                 <StackPanel Grid.Column="1">
                                     <TextBlock Text="{Binding Name}" Style="{StaticResource Title}"/>
                                     <TextBlock Text="{Binding CatName}" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
-                                    <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" Margin="0,4,0,0" Foreground="{DynamicResource AccentText}"
-                                               Visibility="{Binding HasStatus, Converter={StaticResource Vis}}"/>
+                                    <TextBlock Text="{Binding StatusText}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                               Visibility="{Binding HasStatus, Converter={StaticResource Vis}}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding StatusKind}" Value="installed"><Setter Property="Foreground" Value="{DynamicResource Success}"/></DataTrigger>
+                                                    <DataTrigger Binding="{Binding StatusKind}" Value="applied"><Setter Property="Foreground" Value="{DynamicResource Success}"/></DataTrigger>
+                                                    <DataTrigger Binding="{Binding StatusKind}" Value="update"><Setter Property="Foreground" Value="{DynamicResource AccentText}"/></DataTrigger>
+                                                    <DataTrigger Binding="{Binding StatusKind}" Value="partial"><Setter Property="Foreground" Value="{DynamicResource Warning}"/></DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
                                 </StackPanel>
                             </Grid>
                             <WrapPanel Margin="0,4,0,0">
@@ -495,7 +508,7 @@
             <Grid Grid.Row="2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="360"/>
+                    <ColumnDefinition x:Name="RunSideCol" Width="360"/>
                 </Grid.ColumnDefinitions>
                 <ListBox x:Name="RunList" Padding="24,0,16,16" KeyboardNavigation.TabNavigation="Once">
                     <ListBox.GroupStyle>
@@ -514,7 +527,7 @@
                                 <Setter.Value>
                                     <ControlTemplate TargetType="ListBoxItem">
                                         <Border x:Name="Row" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1"
-                                                CornerRadius="6" Margin="0,0,0,4" Padding="12,8">
+                                                CornerRadius="8" Margin="0,0,0,6" Padding="12,10" TextElement.Foreground="{DynamicResource Text}">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="28"/>
@@ -524,7 +537,7 @@
                                                 <TextBlock x:Name="G" Style="{StaticResource Glyph}" Text="{Binding Glyph}" FontSize="14"
                                                            Foreground="{DynamicResource TextMuted}" VerticalAlignment="Top" Margin="0,2,0,0"/>
                                                 <StackPanel Grid.Column="1">
-                                                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap"/>
+                                                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap" Foreground="{DynamicResource Text}"/>
                                                     <TextBlock Text="{Binding Note}" TextWrapping="Wrap" Margin="0,2,0,0">
                                                         <TextBlock.Style>
                                                             <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
@@ -558,7 +571,8 @@
                                                 <Setter TargetName="S" Property="Foreground" Value="{DynamicResource AccentText}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding State}" Value="done">
-                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource Success}"/>
+                                                <Setter TargetName="S" Property="Foreground" Value="{DynamicResource Success}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding State}" Value="error">
                                                 <Setter TargetName="G" Property="Foreground" Value="{DynamicResource Danger}"/>
@@ -572,7 +586,7 @@
                         </Style>
                     </ListBox.ItemContainerStyle>
                 </ListBox>
-                <Border Grid.Column="1" BorderBrush="{DynamicResource Border}" BorderThickness="1,0,0,0">
+                <Border x:Name="RunSide" Grid.Column="1" BorderBrush="{DynamicResource Border}" BorderThickness="1,0,0,0">
                     <Grid Margin="24,0,24,16">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -608,9 +622,16 @@
                         <Button x:Name="RunRetry" Content="Повторить упавшее" Margin="8,0,0,0"/>
                         <Button x:Name="RunOpenLog" Content="Журналы" Margin="8,0,0,0" ToolTip="Открыть папку журналов выполнения и изменений"/>
                         <Button x:Name="RunOpenReport" Content="Открыть отчёт" Margin="8,0,0,0" ToolTip="Открыть отчёт о прогоне в браузере"/>
-                        <Button x:Name="RunOpenFolder" Content="Открыть папку" Margin="8,0,0,0" ToolTip="Открыть папку с отчётами"/>
-                        <Button x:Name="RunSelfRemove" Content="Удалить Tabula Rasa…" Margin="8,0,0,0"
-                                ToolTip="Удалить программу и её данные с этого компьютера. Установленные программы и настройки останутся"/>
+                        <!-- редкое — в меню, чтобы кнопки итога помещались в узком окне -->
+                        <Button x:Name="RunMore" Margin="8,0,0,0" Padding="12,0" ToolTip="Папка с отчётами, удаление Tabula Rasa с этого компьютера">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Ещё"/>
+                                <TextBlock Style="{StaticResource Glyph}" Text="&#xE70D;" FontSize="10" Margin="8,0,0,0"/>
+                            </StackPanel>
+                            <Button.ContextMenu>
+                                <ContextMenu Placement="Top"/>
+                            </Button.ContextMenu>
+                        </Button>
                         <Button x:Name="RunReboot" Content="Перезагрузить" Margin="8,0,0,0" ToolTip="Перезагрузить компьютер"/>
                         <Button x:Name="RunApply" Content="Применить…" MinWidth="152" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
                         <Button x:Name="RunClose" Content="Закрыть" MinWidth="120" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
