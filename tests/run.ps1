@@ -623,7 +623,7 @@ try {
         New-ItemProperty -Path $w -Name 'AutoAdminLogon' -Value '0' -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $w -Name 'DefaultUserName' -Value 'old' -PropertyType String -Force | Out-Null
         $script:Secret9.Clear()
-        $sec = ConvertTo-SecureString 'x' -AsPlainText -Force
+        $sec = New-Object System.Security.SecureString; $sec.AppendChar('x')
         Enable-PbAutoLogon $sec
         $idle = Get-ItemProperty $w
         Set-PbAutoLogonArmed $true; $on = Get-ItemProperty $w
